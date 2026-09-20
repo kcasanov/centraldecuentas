@@ -695,6 +695,7 @@ async function ensurePdfJs(){
 
 const $=s=>document.querySelector(s);
 const $$=s=>[...document.querySelectorAll(s)];
+const normalizeId=value=>String(value??"").trim().toLowerCase();
 const crc=new Intl.NumberFormat("es-CR",{style:"currency",currency:"CRC",maximumFractionDigits:2});
 const ACCOUNTS_API_URL="https://script.google.com/macros/s/AKfycbyj1xOMBXop_X4re99HsrpIVZ0nWnuDQjfCcnRUGg7Z56cpHTr-JXbabKgdUDBIuKV3TA/exec";
 let sheetAccounts=[];
@@ -1943,7 +1944,7 @@ function renderSalaryPreview(plan){
         <span>Seleccionadas: <strong id="salarySelectedCount">${plan.count}</strong></span>
         <span>Sin fondear: <strong id="salarySkippedTotal">${fmt(0)}</strong></span>
       </div>
-      <button class="primary salary-apply-selected" id="salaryApplySelected" ${plan.applied||!plan.entries?.length?"disabled":""}>
+      <button type="button" class="primary salary-apply-selected" id="salaryApplySelected" ${plan.applied||!plan.entries?.length?"disabled":""}>
         ${plan.applied?"Semana aplicada ✓":"Aplicar cuentas seleccionadas"}
       </button>
     </div>`;
@@ -2058,11 +2059,17 @@ function renderSalaryPreview(plan){
 
   const applyBtn=$("#salaryApplySelected");
   if(applyBtn&&!plan.applied){
-    applyBtn.onclick=()=>{
-      const selectedIds=[...box.querySelectorAll(".salary-select-row")]
-        .filter(row=>row.querySelector(".salary-checkbox")?.checked)
-        .map(row=>row.dataset.id);
-      applySalaryWeek(plan.week,selectedIds);
+    applyBtn.onclick=async()=>{
+      try{
+        const selectedIds=[...box.querySelectorAll(".salary-select-row")]
+          .filter(row=>row.querySelector(".salary-checkbox")?.checked)
+          .map(row=>row.dataset.id);
+
+        await applySalaryWeek(plan.week,selectedIds);
+      }catch(err){
+        console.error(err);
+        setSalaryStatus("No se pudo iniciar la aplicación del salario: "+(err?.message||err),false);
+      }
     };
   }
 }
