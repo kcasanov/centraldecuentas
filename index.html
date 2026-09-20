@@ -495,6 +495,7 @@
           <span class="transfer-total" id="cardCompletedExternalTotal">₡0</span>
         </div>
         <div class="card-action">
+          <button class="soft" id="clearCardTotals">Limpiar totales</button>
           <button class="soft" id="saveCardChanges">Guardar cambios</button>
           <button class="primary" id="confirmCardTransfers">Confirmar y rebajar de Mis cuentas</button>
         </div>
@@ -1148,6 +1149,34 @@ $("#addExpense").onclick=()=>{state.expenses.push({id:uid(),bank:"Manual",card:"
 $("#addFinancing").onclick=()=>{state.financing.push({id:uid(),bank:"Manual",name:"",currency:"CRC",line:"",current:1,total:1,quota:0,balance:0,budget:0,paid:false,sourceAccount:"",accountApplied:false});save()};
 $("#clearExpenses").onclick=()=>{if(confirm("¿Eliminar todos los gastos importados/manuales de este mes?")){state.expenses=[];save()}};
 
+$("#clearCardTotals").onclick=()=>{
+  const affected=state.expenses.filter(x=>
+    expenseGroup(x)===expenseFilter &&
+    x.sourceAccount &&
+    (x.status||"Pendiente")!=="Ignorado" &&
+    !x.totalsCleared
+  );
+
+  if(!affected.length){
+    $("#cardTransferStatus").textContent="No hay totales activos para limpiar en esta tarjeta.";
+    return;
+  }
+
+  if(!confirm(
+    `Se limpiarán únicamente los totales visibles de ${expenseFilter}.\n\n`+
+    `No se eliminarán gastos, no se cambiarán estatus y no se modificarán las cuentas de origen.\n\n`+
+    `¿Continuar?`
+  ))return;
+
+  affected.forEach(x=>{
+    x.totalsCleared=true;
+  });
+
+  save();
+  $("#cardTransferStatus").textContent=
+    `✓ Totales de ${expenseFilter} limpiados. Los gastos, estatus y cuentas de origen se conservaron.`;
+};
+
 $$(".expense-tab").forEach(b=>b.addEventListener("click",()=>{
   expenseFilter=b.dataset.filter;
   $$(".expense-tab").forEach(x=>x.classList.toggle("active",x===b));
@@ -1350,6 +1379,92 @@ async function loadSheetAccounts(){
   }
 }
 
+
+function slugifyAccountId(value){
+  return String(value||"")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g,"")
+    .replace(/[^a-z0-9]+/g,"_")
+    .replace(/^_+|_+$/g,"")
+    .slice(0,50);
+}
+
+function nextUniqueAccountId(baseName){
+  const base=slugifyAccountId(baseName)||"cuenta";
+  const existing=new Set(sheetAccounts.map(a=>normalizeId(a.id)));
+
+  let candidate=base;
+  let n=2;
+
+  while(existing.has(normalizeId(candidate))){
+    candidate=`${base}_${n}`;
+    n++;
+  }
+
+  return candidate;
+}
+
+async function createNextMonthAccount(){
+  const name=prompt("Nombre de la nueva cuenta:");
+  if(name===null)return;
+
+  const cleanName=name.trim();
+
+  if(!cleanName){
+    alert("El nombre no puede quedar vacío.");
+    return;
+  }
+
+  const rawBalance=prompt("Saldo inicial:", "0");
+  if(rawBalance===null)return;
+
+  const balance=num(rawBalance);
+
+  if(!Number.isFinite(balance) || balance<0){
+    alert("El saldo inicial debe ser un número válido igual o mayor que 0.");
+    return;
+  }
+
+  const id=nextUniqueAccountId(cleanName);
+
+  const ok=confirm(
+    `Se creará la cuenta:\n\n`+
+    `Nombre: ${cleanName}\n`+
+    `ID: ${id}\n`+
+    `Saldo inicial: ${fmt(balance)}\n`+
+    `Categoría: Pago siguiente mes\n\n`+
+    `¿Confirmar?`
+  );
+
+  if(!ok)return;
+
+  try{
+    setAccountsStatus(`Creando "${cleanName}"…`);
+
+    const data=await apiPost({
+      action:"createAccount",
+      id,
+      name:cleanName,
+      balance,
+      categoryId:"tarjeta_siguiente_mes"
+    });
+
+    if(!data?.ok){
+      throw new Error(data?.error||"No se pudo crear la cuenta.");
+    }
+
+    setAccountsStatus(`✓ Cuenta "${cleanName}" creada. Sincronizando…`,true);
+    await refreshAllLiveData({delay:500,preserveMessage:true});
+    setAccountsStatus(`✓ Cuenta "${cleanName}" agregada a Pago siguiente mes.`,true);
+
+  }catch(err){
+    console.error(err);
+    setAccountsStatus("No se pudo crear la cuenta: "+(err?.message||err),false);
+  }
+}
+
 function renderAccountsList(){
   const box=$("#accountsList");
   const saveBtn=$("#saveAllAccounts");
@@ -1405,7 +1520,10 @@ function renderAccountsList(){
       : num(c.balance);
 
     markup+=`<div class="accounts-category">
-      <div>${isSuperAccountId(c.id)?"★ ":""}${esc(c.name)}${isNextMonth?' <span class="muted" style="font-size:11px">· editable</span>':""}</div>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <span>${isSuperAccountId(c.id)?"★ ":""}${esc(c.name)}${isNextMonth?' <span class="muted" style="font-size:11px">· editable</span>':""}</span>
+        ${isNextMonth?'<button type="button" class="soft add-next-month-account">+ Agregar cuenta</button>':""}
+      </div>
       <div class="money">${fmt(categoryShownBalance)}</div>
     </div>`;
 
@@ -1438,6 +1556,10 @@ function renderAccountsList(){
   }
 
   box.innerHTML=markup||'<span class="muted">No hay cuentas.</span>';
+
+  box.querySelectorAll(".add-next-month-account").forEach(btn=>{
+    btn.addEventListener("click",createNextMonthAccount);
+  });
 
   const updatePendingState=()=>{
     let changes=0;
@@ -2565,6 +2687,7 @@ function render(){
 
     tr.querySelector(".source-account").onchange=e=>{
       x.sourceAccount=e.target.value;
+      x.totalsCleared=false;
 
       if(x.sourceAccount){
         const rounded=roundAmount(x.amount,x.currency);
@@ -2600,6 +2723,7 @@ function render(){
 
     tr.querySelector(".exp-status").onchange=e=>{
       x.status=e.target.value;
+      x.totalsCleared=false;
       x.reviewed=x.status!=="Pendiente";
 
       if(x.status==="Completado"){
@@ -2636,7 +2760,8 @@ function render(){
   // cuando hay cargos en CRC y USD.
   const transferItems=visibleExpenses.filter(x=>
     x.sourceAccount &&
-    (x.status||"Pendiente")!=="Ignorado"
+    (x.status||"Pendiente")!=="Ignorado" &&
+    !x.totalsCleared
   );
 
   $("#cardTransferTotal").textContent=
