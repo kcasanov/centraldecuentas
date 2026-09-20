@@ -1278,11 +1278,25 @@ function renderAccountsList(){
     byCategory.get(a.categoryId).push(a);
   }
 
-  let markup="";
+  const grandTotal=sheetAccounts
+    .filter(a=>a.type==="cuenta")
+    .reduce((sum,a)=>sum+num(a.balance),0);
+
+  let markup=`<div class="accounts-category" style="margin-top:0;background:#0c1d31;border:1px solid var(--line)">
+    <div>Total de Mis cuentas</div>
+    <div class="money">${fmt(grandTotal)}</div>
+  </div>`;
+
   for(const c of categories){
     const isNextMonth=c.id===NEXT_MONTH_CATEGORY_ID;
-    const categoryShownBalance=isSuperAccountId(c.id)
-      ? childrenOfCategory(c.id).reduce((sum,a)=>sum+num(a.balance),0)
+    const categoryChildren=byCategory.get(c.id)||[];
+
+    // El total visible de cada categoría se calcula SIEMPRE con los saldos
+    // actuales de sus cuentas hijas. Así, cuando un salario modifica una
+    // cuenta, el encabezado de la categoría se actualiza inmediatamente sin
+    // depender de que la fila "categoria" del Sheet tenga una fórmula.
+    const categoryShownBalance=categoryChildren.length
+      ? categoryChildren.reduce((sum,a)=>sum+num(a.balance),0)
       : num(c.balance);
 
     markup+=`<div class="accounts-category">
