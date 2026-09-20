@@ -485,6 +485,9 @@
           <span>Total a transferir para esta tarjeta <span class="muted" style="font-size:11px">(según cuentas de origen asignadas)</span>:</span>
           <span class="transfer-total" id="cardTransferTotal">₡0</span>
 
+          <span>Total a sacar de Mis cuentas <span class="muted" style="font-size:11px">(solo cuentas reales)</span>:</span>
+          <span class="transfer-total" id="cardRealAccountsTotal">₡0</span>
+
           <span>Cuenta negocio <span class="muted" style="font-size:11px">(sacar del negocio)</span>:</span>
           <span class="transfer-total" id="cardBusinessTotal">₡0</span>
 
@@ -2638,6 +2641,13 @@ function render(){
 
   $("#cardTransferTotal").textContent=
     formatMixedCurrencyTotal(transferItems,x=>roundAmount(x.amount,x.currency));
+
+  const realAccountItems=transferItems.filter(x=>
+    !isFictitiousSource(x.sourceAccount)
+  );
+
+  $("#cardRealAccountsTotal").textContent=
+    formatMixedCurrencyTotal(realAccountItems,x=>roundAmount(x.amount,x.currency));
 
   const businessItems=transferItems.filter(x=>
     normalizeId(x.sourceAccount)===FICTITIOUS_SOURCE_BUSINESS
