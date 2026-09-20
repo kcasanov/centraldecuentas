@@ -468,7 +468,7 @@
           <button class="expense-tab" data-filter="Lafise">Lafise</button>
         </div>
         <div class="table-wrap"><table>
-          <thead><tr><th>Banco / tarjeta</th><th>Fecha</th><th>Descripción del estado</th><th>Detalle del gasto</th><th>Cuenta de origen</th><th>Moneda</th><th>Monto</th><th>Redondeo</th><th>Saldo</th><th>Dinero destinado</th><th>Diferencia</th><th>Pagado</th><th></th></tr></thead>
+          <thead><tr><th>Banco / tarjeta</th><th>Fecha</th><th>Descripción del estado</th><th>Detalle del gasto</th><th>Cuenta de origen</th><th>Moneda</th><th>Monto</th><th>Redondeo</th><th>Saldo</th><th>Nuevo saldo cuenta origen</th><th>Estatus</th></tr></thead>
           <tbody id="expenseBody"></tbody>
           <tfoot>
             <tr class="totals-row">
@@ -476,21 +476,20 @@
               <td class="money" id="expenseTotal"></td>
               <td class="money" id="roundingTotal"></td>
               <td class="money" id="saldoTotal"></td>
-              <td class="money" id="budgetTotal"></td>
-              <td class="money" id="diffTotal"></td>
-              <td colspan="2"></td>
+              <td></td>
+              <td></td>
             </tr>
           </tfoot>
         </table></div>
         <div class="transfer-summary">
-          <span>Total a transferir para esta tarjeta:</span>
+          <span>Total a transferir para esta tarjeta <span class="muted" style="font-size:11px">(según cuentas de origen asignadas)</span>:</span>
           <span class="transfer-total" id="cardTransferTotal">₡0</span>
         </div>
         <div class="card-action">
           <button class="soft" id="saveCardChanges">Guardar cambios</button>
           <button class="primary" id="confirmCardTransfers">Confirmar y rebajar de Mis cuentas</button>
         </div>
-        <div class="status" id="cardTransferStatus">Podés guardar cambios de nombre, detalle, estado o cuenta sin rebajar dinero. El botón de rebajo solo se usa cuando realmente querés descontar fondos de Mis cuentas.</div>
+        <div class="status" id="cardTransferStatus">Al seleccionar una cuenta de origen se calcula su nuevo saldo y el movimiento pasa a Completado si hay fondos suficientes. El rebajo real de Mis cuentas ocurre al confirmar.</div>
       </div>
     </section>
 
@@ -1149,38 +1148,65 @@ function buildExpenseDisplay(expenses){
   return output;
 }
 
+function projectedSourceBalanceForExpense(x){
+  if(!x?.sourceAccount)return null;
+
+  const sourceId=normalizeId(x.sourceAccount);
+  const starting=sourceBalance(sourceId);
+
+  const pendingAssigned=state.expenses
+    .filter(e=>
+      normalizeId(e.sourceAccount)===sourceId &&
+      !e.transferApplied &&
+      num(e.budget)>0
+    )
+    .reduce((sum,e)=>sum+num(e.budget),0);
+
+  return starting-pendingAssigned;
+}
+
 function singleExpenseRow(x, extraClass="", parentKey=""){
   if(x.detail===undefined)x.detail="";
   if(x.sourceAccount===undefined)x.sourceAccount="";
+  if(x.budget===undefined)x.budget=0;
+  if(x.transferApplied===undefined)x.transferApplied=false;
+
   const roundedAmount=roundAmount(x.amount,x.currency);
-  const d=num(x.budget)-roundedAmount, cls=d>0?"good":d<0?"bad":"neutral";
   const saldo=x.reviewed?0:roundedAmount;
+  const projected=projectedSourceBalanceForExpense(x);
+
+  let projectedHtml='<span class="muted">Seleccioná cuenta</span>';
+  if(projected!==null){
+    const projectedClass=projected<0?"bad":"good";
+    projectedHtml=`<span class="pill ${projectedClass}">${fmt(projected,x.currency)}</span>`;
+  }
+
+  const currentStatus=x.status||(!x.reviewed?"Pendiente":"Completado");
+
   return `<tr data-id="${x.id}" ${parentKey?`data-parent="${parentKey}"`:""} class="${extraClass}">
     <td><span class="bank-badge">${esc(x.bank)}</span> ${esc(x.card||"")}</td>
     <td>${esc(x.date)}</td>
     <td contenteditable="true" class="edit-desc">${esc(x.desc)}</td>
     <td><input class="expense-detail" value="${esc(x.detail||"")}" placeholder="Ej. Luz, teléfono, internet..."></td>
     <td>
-      <select class="source-account">
+      <select class="source-account" ${x.transferApplied?"disabled":""}>
         <option value="">Seleccionar…</option>
         ${sourceOptionsHtml(x.sourceAccount)}
       </select>
     </td>
     <td>${esc(x.currency)}</td>
     <td class="money">${fmt(x.amount,x.currency)}</td>
-    <td class="money"><strong>${fmt(roundAmount(x.amount,x.currency),x.currency)}</strong></td>
+    <td class="money"><strong>${fmt(roundedAmount,x.currency)}</strong></td>
     <td class="money"><strong>${fmt(saldo,x.currency)}</strong></td>
-    <td class="money"><input class="budget-input exp-budget" value="${num(x.budget)||""}" inputmode="decimal" placeholder="0"></td>
-    <td class="money"><span class="pill ${cls}">${fmt(d,x.currency)}</span></td>
+    <td class="money">${x.transferApplied?'<span class="pill good">Rebajado ✓</span>':projectedHtml}</td>
     <td>
-      <select class="exp-status">
-        <option value="Pendiente" ${(x.status||(!x.reviewed?"Pendiente":"Completado"))==="Pendiente"?"selected":""}>Pendiente</option>
-        <option value="Completado" ${(x.status||(!x.reviewed?"Pendiente":"Completado"))==="Completado"?"selected":""}>Completado</option>
-        <option value="Ignorado" ${(x.status||"")==="Ignorado"?"selected":""}>Ignorado</option>
+      <select class="exp-status" ${x.transferApplied?"disabled":""}>
+        <option value="Pendiente" ${currentStatus==="Pendiente"?"selected":""}>Pendiente</option>
+        <option value="Completado" ${currentStatus==="Completado"?"selected":""}>Completado</option>
+        <option value="Ignorado" ${currentStatus==="Ignorado"?"selected":""}>Ignorado</option>
       </select>
-      ${(x.status||(!x.reviewed?"Pendiente":"Completado"))==="Completado"&&x.completedAt?`<span class="completed-date">${esc(x.completedAt)}</span>`:""}
+      ${currentStatus==="Completado"&&x.completedAt?`<span class="completed-date">${esc(x.completedAt)}</span>`:""}
     </td>
-    <td><button class="danger del-exp">×</button></td>
   </tr>`;
 }
 
@@ -1551,7 +1577,7 @@ async function confirmCurrentCardTransfers(){
     $("#cardTransferStatus").textContent="Primero cargá Mis cuentas con tu token.";
     return;
   }
-  const visible=state.expenses.filter(x=>expenseGroup(x)===expenseFilter && x.currency!=="USD" && num(x.budget)>0 && !x.transferApplied);
+  const visible=state.expenses.filter(x=>expenseGroup(x)===expenseFilter && x.currency!=="USD" && x.sourceAccount && !x.transferApplied && roundAmount(x.amount,x.currency)>0);
   if(!visible.length){
     $("#cardTransferStatus").textContent="No hay montos configurados para transferir en esta tarjeta.";
     return;
@@ -1561,7 +1587,7 @@ async function confirmCurrentCardTransfers(){
   const byAccount=new Map();
   for(const x of visible){
     if(!x.sourceAccount) continue;
-    byAccount.set(x.sourceAccount,(byAccount.get(x.sourceAccount)||0)+num(x.budget));
+    byAccount.set(x.sourceAccount,(byAccount.get(x.sourceAccount)||0)+roundAmount(x.amount,x.currency));
   }
   if(!byAccount.size){
     $("#cardTransferStatus").textContent="Seleccioná una cuenta de origen para los montos a transferir.";
@@ -1593,9 +1619,12 @@ async function confirmCurrentCardTransfers(){
 
     // Marca cada movimiento aplicado para evitar descontarlo dos veces accidentalmente.
     for(const x of visible){
-      if(x.sourceAccount && num(x.budget)>0){
+      if(x.sourceAccount && roundAmount(x.amount,x.currency)>0){
+        x.budget=roundAmount(x.amount,x.currency);
         x.transferApplied=true;
-        if(Math.abs(num(x.budget)-num(x.amount))<0.005)x.reviewed=true;
+        x.reviewed=true;
+        x.status="Completado";
+        x.completedAt=x.completedAt||new Date().toISOString();
       }
     }
     save();
@@ -2367,9 +2396,6 @@ function render(){
     const amount=sameCurrencyItems.reduce((s,x)=>s+num(x.amount),0);
     const roundedAmount=sameCurrencyItems.reduce((s,x)=>s+roundAmount(x.amount,x.currency),0);
     const saldo=sameCurrencyItems.filter(x=>!x.reviewed).reduce((s,x)=>s+roundAmount(x.amount,x.currency),0);
-    const budget=sameCurrencyItems.reduce((s,x)=>s+num(x.budget),0);
-    const diff=budget-roundedAmount;
-    const cls=diff>0?"good":diff<0?"bad":"neutral";
     const allReviewed=items.length>0 && items.every(x=>x.reviewed);
 
     const groupRow=`<tr class="group-row" data-group="${entry.key}">
@@ -2388,15 +2414,13 @@ function render(){
       <td class="money">${fmt(amount,currency)}</td>
       <td class="money"><strong>${fmt(roundedAmount,currency)}</strong></td>
       <td class="money"><strong>${fmt(saldo,currency)}</strong></td>
-      <td class="money">${fmt(budget,currency)}</td>
-      <td class="money"><span class="pill ${cls}">${fmt(diff,currency)}</span></td>
-      <td>${allReviewed?'<span class="pill good">Listo</span>':'<span class="pill neutral">Pendiente</span>'}</td>
-      <td></td>
+      <td class="muted">Ver movimientos</td>
+      <td>${allReviewed?'<span class="pill good">Completado</span>':'<span class="pill neutral">Pendiente</span>'}</td>
     </tr>`;
 
     const childRows=items.map(x=>singleExpenseRow(x,"child-row hidden-child",entry.key)).join("");
     return groupRow+childRows;
-  }).join("") || `<tr><td colspan="13" class="muted">No hay gastos importados para ${expenseFilter} en este mes.</td></tr>`;
+  }).join("") || `<tr><td colspan="11" class="muted">No hay gastos importados para ${expenseFilter} en este mes.</td></tr>`;
 
   $$("[data-group-toggle]").forEach(btn=>btn.onclick=()=>{
     const key=btn.dataset.groupToggle;
@@ -2409,49 +2433,88 @@ function render(){
 
   $$("#expenseBody tr[data-id]").forEach(tr=>{
     const x=state.expenses.find(e=>e.id===tr.dataset.id);
-    tr.querySelector(".exp-budget").onchange=e=>{
-      x.budget=num(e.target.value);
-      // Si el dinero destinado cubre exactamente el gasto, queda pagado automáticamente.
-      x.reviewed=Math.abs(num(x.budget)-roundAmount(x.amount,x.currency))<0.005;
-      x.status=x.reviewed?"Completado":"Pendiente";
-      if(x.reviewed && !x.completedAt)x.completedAt=new Date().toISOString();
-      if(!x.reviewed)x.completedAt="";
-      save();
-    };
+
     tr.querySelector(".expense-detail").oninput=e=>{
       x.detail=e.target.value;
       markDirty();
       scheduleWorkspaceSave(650);
     };
-    tr.querySelector(".source-account").onchange=e=>{x.sourceAccount=e.target.value;save()};
+
+    tr.querySelector(".source-account").onchange=e=>{
+      x.sourceAccount=e.target.value;
+
+      if(x.sourceAccount){
+        const rounded=roundAmount(x.amount,x.currency);
+        x.budget=rounded;
+
+        const projected=projectedSourceBalanceForExpense(x);
+
+        if(projected!==null && projected>=0){
+          x.reviewed=true;
+          x.status="Completado";
+          x.completedAt=x.completedAt||new Date().toISOString();
+        }else{
+          x.reviewed=false;
+          x.status="Pendiente";
+          x.completedAt="";
+          $("#cardTransferStatus").textContent=`Saldo insuficiente en ${sourceName(x.sourceAccount)} para cubrir ${fmt(rounded,x.currency)}.`;
+        }
+      }else{
+        x.budget=0;
+        x.reviewed=false;
+        x.status="Pendiente";
+        x.completedAt="";
+      }
+
+      save();
+    };
+
     tr.querySelector(".exp-status").onchange=e=>{
       x.status=e.target.value;
       x.reviewed=x.status!=="Pendiente";
+
       if(x.status==="Completado"){
         x.completedAt=x.completedAt||new Date().toISOString();
+        if(x.sourceAccount && !x.transferApplied){
+          x.budget=roundAmount(x.amount,x.currency);
+        }
       }else{
         x.completedAt="";
+        if(x.status==="Pendiente" && !x.transferApplied){
+          x.budget=x.sourceAccount?roundAmount(x.amount,x.currency):0;
+        }
       }
+
       save();
     };
+
     tr.querySelector(".edit-desc").oninput=e=>{
       x.desc=e.target.textContent.trim();
       markDirty();
       scheduleWorkspaceSave(650);
     };
-    tr.querySelector(".del-exp").onclick=()=>{state.expenses=state.expenses.filter(e=>e.id!==x.id);save()};
   });
   const visibleCRC=visibleExpenses.filter(x=>x.currency!=="USD");
   const visibleExpenseTotal=visibleCRC.reduce((s,x)=>s+num(x.amount),0);
   const visibleRoundingTotal=visibleCRC.reduce((s,x)=>s+roundAmount(x.amount,x.currency),0);
   const visibleSaldoTotal=visibleCRC.filter(x=>!x.reviewed).reduce((s,x)=>s+roundAmount(x.amount,x.currency),0);
-  const visibleBudgetTotal=visibleCRC.reduce((s,x)=>s+num(x.budget),0);
+
   $("#expenseTotal").textContent=fmt(visibleExpenseTotal);
   $("#roundingTotal").textContent=fmt(visibleRoundingTotal);
   $("#saldoTotal").textContent=fmt(visibleSaldoTotal);
-  $("#budgetTotal").textContent=fmt(visibleBudgetTotal);
-  $("#diffTotal").textContent=fmt(visibleBudgetTotal-visibleRoundingTotal);
-  const transferTotal=visibleExpenses.filter(x=>x.currency!=="USD" && !x.transferApplied).reduce((s,x)=>s+num(x.budget),0);
+
+  // Total real que se debe mover a la cuenta con la que se pagará esta tarjeta.
+  // Se mantiene visible incluso después de confirmar el rebajo en Mis cuentas,
+  // porque sirve como referencia para hacer la transferencia bancaria.
+  // Solo contamos gastos con cuenta de origen asignada y que no estén ignorados.
+  const transferTotal=visibleExpenses
+    .filter(x=>
+      x.currency!=="USD" &&
+      x.sourceAccount &&
+      (x.status||"Pendiente")!=="Ignorado"
+    )
+    .reduce((s,x)=>s+roundAmount(x.amount,x.currency),0);
+
   $("#cardTransferTotal").textContent=fmt(transferTotal);
 
   $("#finCurrentMonthHead").textContent=`Cuota ${monthLabel(month)}`;
