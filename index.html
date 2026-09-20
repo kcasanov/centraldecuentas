@@ -481,9 +481,15 @@
             </tr>
           </tfoot>
         </table></div>
-        <div class="transfer-summary">
+        <div class="transfer-summary" style="display:grid;grid-template-columns:1fr auto;gap:7px 14px">
           <span>Total a transferir para esta tarjeta <span class="muted" style="font-size:11px">(según cuentas de origen asignadas)</span>:</span>
           <span class="transfer-total" id="cardTransferTotal">₡0</span>
+
+          <span>Cuenta negocio <span class="muted" style="font-size:11px">(sacar del negocio)</span>:</span>
+          <span class="transfer-total" id="cardBusinessTotal">₡0</span>
+
+          <span>Saldo completado <span class="muted" style="font-size:11px">(cuentas externas / dólares)</span>:</span>
+          <span class="transfer-total" id="cardCompletedExternalTotal">₡0</span>
         </div>
         <div class="card-action">
           <button class="soft" id="saveCardChanges">Guardar cambios</button>
@@ -715,6 +721,21 @@ function childrenOfCategory(categoryId){
   );
 }
 
+const FICTITIOUS_SOURCE_BUSINESS="__cuenta_negocio__";
+const FICTITIOUS_SOURCE_COMPLETED="__saldo_completado__";
+
+function isFictitiousSource(sourceId){
+  const key=normalizeId(sourceId);
+  return key===FICTITIOUS_SOURCE_BUSINESS || key===FICTITIOUS_SOURCE_COMPLETED;
+}
+
+function fictitiousSourceName(sourceId){
+  const key=normalizeId(sourceId);
+  if(key===FICTITIOUS_SOURCE_BUSINESS)return "Cuenta negocio";
+  if(key===FICTITIOUS_SOURCE_COMPLETED)return "Saldo completado";
+  return "";
+}
+
 function sourceBalance(sourceId){
   const key=String(sourceId||"").trim().toLowerCase();
   if(isSuperAccountId(key)){
@@ -726,6 +747,11 @@ function sourceBalance(sourceId){
 
 function sourceName(sourceId){
   const key=String(sourceId||"").trim().toLowerCase();
+
+  if(isFictitiousSource(key)){
+    return fictitiousSourceName(key);
+  }
+
   const a=sheetAccounts.find(x=>String(x.id||"").trim().toLowerCase()===key);
   return a ? a.name : sourceId;
 }
@@ -755,9 +781,21 @@ function selectableSources(){
 
 function sourceOptionsHtml(selectedId=""){
   const selected=String(selectedId||"").trim().toLowerCase();
-  return selectableSources().map(s=>
+
+  const fictitious=[
+    {id:FICTITIOUS_SOURCE_BUSINESS,name:"Cuenta negocio"},
+    {id:FICTITIOUS_SOURCE_COMPLETED,name:"Saldo completado"}
+  ];
+
+  const fictitiousHtml=fictitious.map(s=>
+    `<option value="${esc(s.id)}" ${normalizeId(s.id)===selected?"selected":""}>◈ ${esc(s.name)} — cuenta ficticia</option>`
+  ).join("");
+
+  const realHtml=selectableSources().map(s=>
     `<option value="${esc(s.id)}" ${String(s.id).trim().toLowerCase()===selected?"selected":""}>${s.super?"★ ":""}${esc(s.name)} — ${fmt(s.balance)}</option>`
   ).join("");
+
+  return fictitiousHtml+realHtml;
 }
 
 const LOGIN_USER="kendal";
@@ -830,6 +868,21 @@ function fmtFinancingTotals(items,valueFn){
 
   return parts.join(" · ");
 }
+function formatMixedCurrencyTotal(items,valueFn){
+  const crcTotal=items
+    .filter(x=>(x.currency||"CRC")==="CRC")
+    .reduce((s,x)=>s+num(valueFn(x)),0);
+
+  const usdTotal=items
+    .filter(x=>(x.currency||"CRC")==="USD")
+    .reduce((s,x)=>s+num(valueFn(x)),0);
+
+  const parts=[];
+  if(crcTotal || !usdTotal)parts.push(fmt(crcTotal,"CRC"));
+  if(usdTotal)parts.push(fmt(usdTotal,"USD"));
+  return parts.join(" · ");
+}
+
 function roundAmount(value,currency="CRC"){
   const n=num(value);
   if(n<=0)return 0;
@@ -1152,6 +1205,10 @@ function projectedSourceBalanceForExpense(x){
   if(!x?.sourceAccount)return null;
 
   const sourceId=normalizeId(x.sourceAccount);
+
+  // Las cuentas ficticias no tienen saldo real en Cuentas mensuales.
+  if(isFictitiousSource(sourceId))return null;
+
   const starting=sourceBalance(sourceId);
 
   const pendingAssigned=state.expenses
@@ -1176,7 +1233,10 @@ function singleExpenseRow(x, extraClass="", parentKey=""){
   const projected=projectedSourceBalanceForExpense(x);
 
   let projectedHtml='<span class="muted">Seleccioná cuenta</span>';
-  if(projected!==null){
+
+  if(isFictitiousSource(x.sourceAccount)){
+    projectedHtml=`<span class="pill neutral">${esc(fictitiousSourceName(x.sourceAccount))}</span>`;
+  }else if(projected!==null){
     const projectedClass=projected<0?"bad":"good";
     projectedHtml=`<span class="pill ${projectedClass}">${fmt(projected,x.currency)}</span>`;
   }
@@ -1198,7 +1258,15 @@ function singleExpenseRow(x, extraClass="", parentKey=""){
     <td class="money">${fmt(x.amount,x.currency)}</td>
     <td class="money"><strong>${fmt(roundedAmount,x.currency)}</strong></td>
     <td class="money"><strong>${fmt(saldo,x.currency)}</strong></td>
-    <td class="money">${x.transferApplied?'<span class="pill good">Rebajado ✓</span>':projectedHtml}</td>
+    <td class="money">${
+      x.transferApplied
+        ? (
+            isFictitiousSource(x.sourceAccount)
+              ? '<span class="pill good">Registrado ✓</span>'
+              : '<span class="pill good">Rebajado ✓</span>'
+          )
+        : projectedHtml
+    }</td>
     <td>
       <select class="exp-status" ${x.transferApplied?"disabled":""}>
         <option value="Pendiente" ${currentStatus==="Pendiente"?"selected":""}>Pendiente</option>
@@ -1577,36 +1645,86 @@ async function confirmCurrentCardTransfers(){
     $("#cardTransferStatus").textContent="Primero cargá Mis cuentas con tu token.";
     return;
   }
-  const visible=state.expenses.filter(x=>expenseGroup(x)===expenseFilter && x.currency!=="USD" && x.sourceAccount && !x.transferApplied && roundAmount(x.amount,x.currency)>0);
+
+  const visible=state.expenses.filter(x=>
+    expenseGroup(x)===expenseFilter &&
+    x.sourceAccount &&
+    !x.transferApplied &&
+    (x.status||"Pendiente")!=="Ignorado" &&
+    roundAmount(x.amount,x.currency)>0
+  );
+
   if(!visible.length){
-    $("#cardTransferStatus").textContent="No hay montos configurados para transferir en esta tarjeta.";
+    $("#cardTransferStatus").textContent="No hay movimientos pendientes de confirmar para esta tarjeta.";
     return;
   }
 
-  // Acumula por cuenta de origen para hacer una sola rebaja por cuenta.
-  const byAccount=new Map();
-  for(const x of visible){
-    if(!x.sourceAccount) continue;
-    byAccount.set(x.sourceAccount,(byAccount.get(x.sourceAccount)||0)+roundAmount(x.amount,x.currency));
-  }
-  if(!byAccount.size){
-    $("#cardTransferStatus").textContent="Seleccioná una cuenta de origen para los montos a transferir.";
+  const realItems=visible.filter(x=>!isFictitiousSource(x.sourceAccount));
+  const fictitiousItems=visible.filter(x=>isFictitiousSource(x.sourceAccount));
+
+  // Una cuenta real del Sheet está expresada en CRC. Para gastos USD usamos
+  // "Saldo completado" o "Cuenta negocio", evitando mezclar monedas.
+  const invalidUsdReal=realItems.filter(x=>(x.currency||"CRC")==="USD");
+  if(invalidUsdReal.length){
+    $("#cardTransferStatus").textContent=
+      'Hay cargos en USD asociados a una cuenta real de Mis cuentas. Para dólares elegí "Saldo completado" o "Cuenta negocio", porque esas cuentas no se rebajan del Sheet.';
     return;
+  }
+
+  // Acumula solamente cuentas REALES en CRC para hacer una sola rebaja por cuenta.
+  const byAccount=new Map();
+
+  for(const x of realItems){
+    const amount=roundAmount(x.amount,x.currency);
+    byAccount.set(
+      x.sourceAccount,
+      (byAccount.get(x.sourceAccount)||0)+amount
+    );
   }
 
   // Validación local antes de escribir.
   for(const [id,amount] of byAccount){
     const available=sourceBalance(id);
     if(available<amount){
-      $("#cardTransferStatus").textContent=`Saldo insuficiente en ${sourceName(id)}. Disponible ${fmt(available)}, requerido ${fmt(amount)}.`;
+      $("#cardTransferStatus").textContent=
+        `Saldo insuficiente en ${sourceName(id)}. Disponible ${fmt(available)}, requerido ${fmt(amount)}.`;
       return;
     }
   }
 
+  const realTotal=[...byAccount.values()].reduce((a,b)=>a+b,0);
+  const businessItems=fictitiousItems.filter(x=>
+    normalizeId(x.sourceAccount)===FICTITIOUS_SOURCE_BUSINESS
+  );
+  const externalItems=fictitiousItems.filter(x=>
+    normalizeId(x.sourceAccount)===FICTITIOUS_SOURCE_COMPLETED
+  );
+
+  const businessText=formatMixedCurrencyTotal(
+    businessItems,
+    x=>roundAmount(x.amount,x.currency)
+  );
+
+  const externalText=formatMixedCurrencyTotal(
+    externalItems,
+    x=>roundAmount(x.amount,x.currency)
+  );
+
+  const confirmLines=[];
+  if(realTotal>0)confirmLines.push(`Se rebajarán ${fmt(realTotal)} de Mis cuentas.`);
+  if(businessItems.length)confirmLines.push(`Cuenta negocio: ${businessText}.`);
+  if(externalItems.length)confirmLines.push(`Saldo completado: ${externalText}.`);
+
+  if(!confirm(
+    `${confirmLines.join("\\n")}\\n\\nLos movimientos ficticios se registran, pero no modifican Cuentas mensuales.\\n\\n¿Confirmar?`
+  ))return;
+
   $("#cardTransferStatus").textContent="Actualizando Google Sheet…";
+
   try{
     const {year,month:monthNumber}=selectedYearMonth();
-    const cardOperationId=`TARJETA_${String(expenseFilter).toUpperCase().replace(/[^A-Z0-9]+/g,"_")}_${year}_${String(monthNumber).padStart(2,"0")}_${Date.now()}`;
+    const cardOperationId=
+      `TARJETA_${String(expenseFilter).toUpperCase().replace(/[^A-Z0-9]+/g,"_")}_${year}_${String(monthNumber).padStart(2,"0")}_${Date.now()}`;
 
     for(const [id,amount] of byAccount){
       await spendSource(id,amount,token,{
@@ -1617,23 +1735,25 @@ async function confirmCurrentCardTransfers(){
       });
     }
 
-    // Marca cada movimiento aplicado para evitar descontarlo dos veces accidentalmente.
     for(const x of visible){
-      if(x.sourceAccount && roundAmount(x.amount,x.currency)>0){
-        x.budget=roundAmount(x.amount,x.currency);
-        x.transferApplied=true;
-        x.reviewed=true;
-        x.status="Completado";
-        x.completedAt=x.completedAt||new Date().toISOString();
-      }
+      x.budget=roundAmount(x.amount,x.currency);
+      x.transferApplied=true;
+      x.reviewed=true;
+      x.status="Completado";
+      x.completedAt=x.completedAt||new Date().toISOString();
     }
+
     save();
 
-    const transferred=[...byAccount.values()].reduce((a,b)=>a+b,0);
-    $("#cardTransferStatus").textContent=`✓ Se rebajaron ${fmt(transferred)}. Sincronizando saldos…`;
+    $("#cardTransferStatus").textContent=
+      realTotal>0
+        ? `✓ Se rebajaron ${fmt(realTotal)} de Mis cuentas. Sincronizando saldos…`
+        : "✓ Movimientos externos registrados. Sincronizando…";
 
     await refreshAllLiveData({delay:1200,preserveMessage:true});
-    $("#cardTransferStatus").textContent=`✓ Listo. Se rebajaron ${fmt(transferred)} de Mis cuentas, los saldos se actualizaron y el movimiento quedó en Historial.`;
+
+    $("#cardTransferStatus").textContent=
+      `✓ Listo. ${realTotal>0?`Se rebajaron ${fmt(realTotal)} de Mis cuentas. `:""}Los movimientos de Cuenta negocio / Saldo completado quedaron registrados sin alterar cuentas reales.`;
   }catch(err){
     console.error(err);
     $("#cardTransferStatus").textContent="Error al actualizar: "+err.message;
@@ -2447,17 +2567,23 @@ function render(){
         const rounded=roundAmount(x.amount,x.currency);
         x.budget=rounded;
 
-        const projected=projectedSourceBalanceForExpense(x);
-
-        if(projected!==null && projected>=0){
+        if(isFictitiousSource(x.sourceAccount)){
           x.reviewed=true;
           x.status="Completado";
           x.completedAt=x.completedAt||new Date().toISOString();
         }else{
-          x.reviewed=false;
-          x.status="Pendiente";
-          x.completedAt="";
-          $("#cardTransferStatus").textContent=`Saldo insuficiente en ${sourceName(x.sourceAccount)} para cubrir ${fmt(rounded,x.currency)}.`;
+          const projected=projectedSourceBalanceForExpense(x);
+
+          if(projected!==null && projected>=0){
+            x.reviewed=true;
+            x.status="Completado";
+            x.completedAt=x.completedAt||new Date().toISOString();
+          }else{
+            x.reviewed=false;
+            x.status="Pendiente";
+            x.completedAt="";
+            $("#cardTransferStatus").textContent=`Saldo insuficiente en ${sourceName(x.sourceAccount)} para cubrir ${fmt(rounded,x.currency)}.`;
+          }
         }
       }else{
         x.budget=0;
@@ -2503,19 +2629,29 @@ function render(){
   $("#roundingTotal").textContent=fmt(visibleRoundingTotal);
   $("#saldoTotal").textContent=fmt(visibleSaldoTotal);
 
-  // Total real que se debe mover a la cuenta con la que se pagará esta tarjeta.
-  // Se mantiene visible incluso después de confirmar el rebajo en Mis cuentas,
-  // porque sirve como referencia para hacer la transferencia bancaria.
-  // Solo contamos gastos con cuenta de origen asignada y que no estén ignorados.
-  const transferTotal=visibleExpenses
-    .filter(x=>
-      x.currency!=="USD" &&
-      x.sourceAccount &&
-      (x.status||"Pendiente")!=="Ignorado"
-    )
-    .reduce((s,x)=>s+roundAmount(x.amount,x.currency),0);
+  // Total a transferir para pagar la tarjeta. Se muestra separado por moneda
+  // cuando hay cargos en CRC y USD.
+  const transferItems=visibleExpenses.filter(x=>
+    x.sourceAccount &&
+    (x.status||"Pendiente")!=="Ignorado"
+  );
 
-  $("#cardTransferTotal").textContent=fmt(transferTotal);
+  $("#cardTransferTotal").textContent=
+    formatMixedCurrencyTotal(transferItems,x=>roundAmount(x.amount,x.currency));
+
+  const businessItems=transferItems.filter(x=>
+    normalizeId(x.sourceAccount)===FICTITIOUS_SOURCE_BUSINESS
+  );
+
+  $("#cardBusinessTotal").textContent=
+    formatMixedCurrencyTotal(businessItems,x=>roundAmount(x.amount,x.currency));
+
+  const completedExternalItems=transferItems.filter(x=>
+    normalizeId(x.sourceAccount)===FICTITIOUS_SOURCE_COMPLETED
+  );
+
+  $("#cardCompletedExternalTotal").textContent=
+    formatMixedCurrencyTotal(completedExternalItems,x=>roundAmount(x.amount,x.currency));
 
   $("#finCurrentMonthHead").textContent=`Cuota ${monthLabel(month)}`;
   $("#finBody").innerHTML=state.financing.map(x=>{
