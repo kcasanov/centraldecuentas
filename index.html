@@ -1943,8 +1943,8 @@ function renderSalaryPreview(plan){
         <span>Seleccionadas: <strong id="salarySelectedCount">${plan.count}</strong></span>
         <span>Sin fondear: <strong id="salarySkippedTotal">${fmt(0)}</strong></span>
       </div>
-      <button class="primary salary-apply-selected" id="salaryApplySelected" ${plan.applied||invalid.length||!plan.entries?.length?"disabled":""}>
-        ${plan.applied?"Semana aplicada ✓":invalid.length?"Revisar IDs":"Aplicar cuentas seleccionadas"}
+      <button class="primary salary-apply-selected" id="salaryApplySelected" ${plan.applied||!plan.entries?.length?"disabled":""}>
+        ${plan.applied?"Semana aplicada ✓":"Aplicar cuentas seleccionadas"}
       </button>
     </div>`;
 
@@ -1982,7 +1982,7 @@ function renderSalaryPreview(plan){
     if(totalEl)totalEl.textContent=fmt(selectedTotal);
     if(countEl)countEl.textContent=selectedCount;
     if(skippedEl)skippedEl.textContent=fmt(allTotal-selectedTotal);
-    if(applyBtn&&!plan.applied&&!invalid.length){
+    if(applyBtn&&!plan.applied){
       applyBtn.disabled=selectedCount===0;
     }
   };
@@ -2075,11 +2075,6 @@ async function applySalaryWeek(week,selectedIds=[]){
     setSalaryStatus(`${plan.monthName} semana ${week} ya fue aplicada.`,false);
     return;
   }
-  if((plan.invalidIds||[]).length){
-    setSalaryStatus("Hay IDs pendientes. Agregalos desde esta pantalla o corregí el ID en la hoja de salario.",false);
-    return;
-  }
-
   const selectedEntries=(plan.entries||[]).filter(entry=>
     selectedIds.some(id=>normalizeId(id)===normalizeId(entry.id))
   );
@@ -2091,10 +2086,12 @@ async function applySalaryWeek(week,selectedIds=[]){
 
   const selectedTotal=selectedEntries.reduce((sum,x)=>sum+num(x.amount),0);
   const skippedCount=(plan.entries||[]).length-selectedEntries.length;
+  const pendingInvalid=plan.invalidIds||[];
 
   const ok=confirm(
     `Se van a sumar ${fmt(selectedTotal)} a ${selectedEntries.length} cuentas de ${plan.monthName}, semana ${week}.`+
-    `${skippedCount?`\n\n${skippedCount} cuenta(s) quedarán sin fondear.`:""}`+
+    `${skippedCount?`\n\n${skippedCount} cuenta(s) válidas quedarán sin fondear.`:""}`+
+    `${pendingInvalid.length?`\n\n${pendingInvalid.length} ID(s) pendientes no se aplicarán en esta operación y deberán corregirse o agregarse después.`:""}`+
     `\n\nEsta semana solo se puede aplicar una vez.\n\n¿Confirmar?`
   );
   if(!ok)return;
