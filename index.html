@@ -1020,6 +1020,7 @@ async function loadMonthlyWorkspace(options={}){
       currency:String(x.currency||"CRC").toUpperCase(),
       sourceAccount:x.sourceAccount||"",
       paid:!!x.paid,
+      paidAt:x.paidAt||"",
       accountApplied:!!x.accountApplied
     }));
 
@@ -1081,9 +1082,21 @@ async function persistMonthlyWorkspace(force=false){
   if(!accountsLoaded){
     throw new Error("No hay una sesión activa con Google Sheets.");
   }
+
+  // Si un autoguardado ya está corriendo, esperamos a que termine.
+  // Antes se devolvía "true" inmediatamente y el botón podía aparentar
+  // que había guardado aunque la escritura anterior siguiera en curso.
   if(workspaceSaving){
-    return true;
+    let safety=0;
+    while(workspaceSaving && safety<100){
+      await new Promise(resolve=>setTimeout(resolve,50));
+      safety++;
+    }
+    if(workspaceSaving){
+      throw new Error("La sincronización anterior no terminó a tiempo.");
+    }
   }
+
   if(!dirty && !force){
     return true;
   }
@@ -2851,6 +2864,9 @@ function render(){
 
     tr.querySelector(".fin-paid-check").onchange=e=>{
       x.paid=e.target.checked;
+      x.paidAt=x.paid
+        ? (x.paidAt||new Date().toISOString())
+        : "";
       save();
     };
     tr.querySelector(".fin-source-account").onchange=e=>{
@@ -3423,6 +3439,58 @@ $("#saveCardChanges").onclick=async()=>{
 
 $("#confirmCardTransfers").onclick=confirmCurrentCardTransfers;
 
+
+function captureFinancingEditsFromDom(){
+  $$("#finBody tr[data-id]").forEach(tr=>{
+    const item=state.financing.find(x=>x.id===tr.dataset.id);
+    if(!item)return;
+
+    const nameInput=tr.querySelector(".fin-name");
+    const paidInput=tr.querySelector(".fin-paid-check");
+    const sourceInput=tr.querySelector(".fin-source-account");
+
+    if(nameInput){
+      item.name=nameInput.value.trim();
+      const key=financingAliasKey(item);
+      if(item.name){
+        financingAliases[key]=item.name;
+      }else{
+        delete financingAliases[key];
+      }
+    }
+
+    if(paidInput){
+      const wasPaid=!!item.paid;
+      item.paid=!!paidInput.checked;
+
+      if(item.paid && !wasPaid){
+        item.paidAt=item.paidAt||new Date().toISOString();
+      }
+
+      if(!item.paid){
+        item.paidAt="";
+      }
+    }
+
+    if(sourceInput && !item.accountApplied){
+      item.sourceAccount=sourceInput.value;
+    }
+  });
+}
+
+async function waitForWorkspaceSaveToFinish(){
+  let safety=0;
+
+  while(workspaceSaving && safety<100){
+    await new Promise(resolve=>setTimeout(resolve,50));
+    safety++;
+  }
+
+  if(workspaceSaving){
+    throw new Error("La sincronización anterior sigue en curso. Intentá de nuevo en unos segundos.");
+  }
+}
+
 $("#saveFinancingChanges").onclick=async()=>{
   if(!accountsLoaded){
     $("#financingTransferStatus").textContent="Primero iniciá sesión para poder guardar en Google Sheets.";
@@ -3432,14 +3500,23 @@ $("#saveFinancingChanges").onclick=async()=>{
   $("#financingTransferStatus").textContent="Guardando financiamientos…";
 
   try{
-    if(!dirty){
-      markDirty();
-    }
+    // Leemos directamente lo que está marcado en pantalla antes de guardar.
+    // Así "Pagado este mes" se conserva aunque no exista una cuenta de origen.
+    captureFinancingEditsFromDom();
 
+    // Evita la carrera entre el autoguardado del checkbox y el botón manual.
+    clearTimeout(workspaceSaveTimer);
+    markDirty();
+    await waitForWorkspaceSaveToFinish();
     await persistMonthlyWorkspace(true);
+
     workspaceLoaded=true;
 
-    $("#financingTransferStatus").textContent=`✓ Cambios guardados para ${monthLabel(month)}. No se rebajó dinero de ninguna cuenta.`;
+    const paidCount=state.financing.filter(x=>x.paid).length;
+
+    $("#financingTransferStatus").textContent=
+      `✓ Cambios guardados para ${monthLabel(month)}. ${paidCount} financiamiento(s) marcado(s) como pagado este mes. No se rebajó dinero de ninguna cuenta.`;
+
   }catch(err){
     console.error(err);
     const message=err?.message||String(err)||"Error desconocido";
