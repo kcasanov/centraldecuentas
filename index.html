@@ -339,6 +339,23 @@
     margin-top:16px;padding-top:14px;border-top:1px solid var(--line);flex-wrap:wrap
   }
   .salary-preview-summary{display:flex;gap:18px;flex-wrap:wrap;color:var(--muted)}
+  .salary-invalid-list{display:grid;gap:10px;margin-top:10px}
+  .salary-invalid-row{
+    display:grid;
+    grid-template-columns:minmax(160px,1fr) minmax(180px,1.4fr) minmax(190px,1.2fr) auto;
+    gap:8px;
+    align-items:end;
+    padding:10px;
+    border:1px solid var(--line);
+    border-radius:12px;
+    background:rgba(255,255,255,.025);
+  }
+  .salary-invalid-row label{display:grid;gap:5px;font-size:11px;color:var(--muted)}
+  .salary-invalid-row code{font-size:12px}
+  .salary-invalid-row input,.salary-invalid-row select{min-width:0}
+  @media(max-width:900px){
+    .salary-invalid-row{grid-template-columns:1fr}
+  }
   .salary-preview-summary strong{color:var(--text)}
   .salary-apply-selected{min-height:46px;min-width:180px}
   .salary-row-unchecked{opacity:.48}
@@ -1849,9 +1866,46 @@ function renderSalaryPreview(plan){
   const invalid=plan.invalidIds||[];
   let warning="";
   if(invalid.length){
+    const categoryOptions=sheetAccounts
+      .filter(a=>a.type==="categoria")
+      .map(a=>`<option value="${esc(a.id)}">${esc(a.name)} · ${esc(a.id)}</option>`)
+      .join("");
+
+    const invalidRows=invalid.map((x,index)=>`
+      <div class="salary-invalid-row" data-invalid-index="${index}">
+        <div>
+          <div class="muted" style="font-size:11px">ID detectado</div>
+          <code>${esc(x.id)}</code>
+          <div class="muted" style="font-size:11px;margin-top:4px">Monto en salario: ${fmt(x.amount)}</div>
+        </div>
+
+        <label>
+          Nombre de la nueva cuenta
+          <input class="salary-invalid-name" type="text"
+            value="${esc(String(x.name||"").toLowerCase()==="total"?"":x.name||"")}"
+            placeholder="Ej. Gastos Mami">
+        </label>
+
+        <label>
+          Categoría
+          <select class="salary-invalid-category">
+            <option value="">Seleccionar categoría…</option>
+            ${categoryOptions}
+          </select>
+        </label>
+
+        <button class="soft salary-create-account" type="button">
+          + Agregar cuenta
+        </button>
+      </div>
+    `).join("");
+
     warning=`<div class="notice" style="border:1px solid #7c513c">
-      Hay IDs que no coinciden con Cuentas mensuales: ${invalid.map(x=>`${esc(x.name)} [${esc(x.id)}]`).join(", ")}.
-      No se permitirá aplicar la semana hasta corregirlos.
+      <strong>Hay IDs que no existen en Cuentas mensuales.</strong>
+      <div class="muted" style="margin-top:5px">
+        Si el ID es correcto, podés crear la cuenta aquí mismo. Si es un typo, corregilo en la hoja de salario en vez de crear una cuenta nueva.
+      </div>
+      <div class="salary-invalid-list">${invalidRows}</div>
     </div>`;
   }
 
@@ -1936,6 +1990,72 @@ function renderSalaryPreview(plan){
   checkboxes.forEach(cb=>cb.addEventListener("change",updateSelection));
   updateSelection();
 
+  box.querySelectorAll(".salary-create-account").forEach(btn=>{
+    btn.onclick=async()=>{
+      const row=btn.closest(".salary-invalid-row");
+      const index=Number(row?.dataset.invalidIndex);
+      const invalidItem=invalid[index];
+      if(!row||!invalidItem)return;
+
+      const name=row.querySelector(".salary-invalid-name")?.value.trim()||"";
+      const categoryId=row.querySelector(".salary-invalid-category")?.value.trim()||"";
+
+      if(!name){
+        setSalaryStatus("Escribí un nombre para la nueva cuenta antes de agregarla.",false);
+        row.querySelector(".salary-invalid-name")?.focus();
+        return;
+      }
+
+      if(!categoryId){
+        setSalaryStatus("Seleccioná la categoría donde querés guardar la nueva cuenta.",false);
+        row.querySelector(".salary-invalid-category")?.focus();
+        return;
+      }
+
+      const ok=confirm(
+        `Se creará una nueva cuenta en "Cuentas mensuales".\n\n`+
+        `Nombre: ${name}\n`+
+        `ID: ${invalidItem.id}\n`+
+        `Saldo inicial: ₡0\n`+
+        `Categoría ID: ${categoryId}\n`+
+        `\n¿Confirmar?`
+      );
+
+      if(!ok)return;
+
+      btn.disabled=true;
+      btn.textContent="Agregando…";
+      setSalaryStatus(`Creando la cuenta ${name} [${invalidItem.id}]…`);
+
+      try{
+        await apiPost({
+          action:"createAccount",
+          id:invalidItem.id,
+          name,
+          balance:0,
+          categoryId
+        });
+
+        setSalaryStatus(`✓ Cuenta ${name} creada. Actualizando salarios…`,true);
+
+        await refreshAllLiveData({delay:300});
+
+        selectedSalaryWeek=plan.week;
+        if(salaryPlans[plan.week]){
+          renderSalaryPreview(salaryPlans[plan.week]);
+        }
+
+        setSalaryStatus(`✓ Cuenta ${name} [${invalidItem.id}] agregada correctamente.`,true);
+
+      }catch(err){
+        console.error(err);
+        setSalaryStatus("No se pudo crear la cuenta: "+err.message,false);
+        btn.disabled=false;
+        btn.textContent="+ Agregar cuenta";
+      }
+    };
+  });
+
   const applyBtn=$("#salaryApplySelected");
   if(applyBtn&&!plan.applied){
     applyBtn.onclick=()=>{
@@ -1956,7 +2076,7 @@ async function applySalaryWeek(week,selectedIds=[]){
     return;
   }
   if((plan.invalidIds||[]).length){
-    setSalaryStatus("Hay IDs inválidos. Corregilos en Google Sheets antes de aplicar.",false);
+    setSalaryStatus("Hay IDs pendientes. Agregalos desde esta pantalla o corregí el ID en la hoja de salario.",false);
     return;
   }
 
