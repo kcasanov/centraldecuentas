@@ -428,9 +428,8 @@
 
     <section id="dashboard" class="tab">
       <div class="cards">
-        <div class="card"><small>Ingresos / salario</small><strong id="kpiIncome">₡0</strong></div>
+        <div class="card"><small>Proyección del mes</small><strong id="kpiIncome">₡0</strong></div>
         <div class="card"><small>Gastos del período</small><strong id="kpiExpenses">₡0</strong></div>
-        <div class="card"><small>Dinero destinado</small><strong id="kpiBudget">₡0</strong></div>
         <div class="card"><small>Diferencia gastos</small><strong id="kpiDiff">₡0</strong></div>
         <div class="card"><small>Saldo mensual estimado</small><strong id="kpiBalance">₡0</strong></div>
       </div>
@@ -446,13 +445,12 @@
       </div>
 
       <div class="grid2">
-        <div class="panel"><h2>Ingresos</h2>
-          <div class="form-grid">
-            <input id="incomeName" placeholder="Ej. Salario">
-            <input id="incomeAmount" inputmode="decimal" placeholder="Monto">
-            <button class="primary" id="addIncome">Agregar ingreso</button>
+        <div class="panel">
+          <div class="section-title">
+            <h2>Recordatorio de pagos</h2>
+            <span class="muted">Rojo = vence en 5 días o menos</span>
           </div>
-          <div id="incomeList" style="margin-top:12px"></div>
+          <div id="paymentReminders"></div>
         </div>
         <div class="panel"><h2>Resumen rápido</h2><div id="quickSummary" class="muted"></div></div>
       </div>
@@ -1072,7 +1070,6 @@ async function flushWorkspaceSave(){
 
 $$(".nav button").forEach(b=>b.onclick=()=>{ $$(".nav button").forEach(x=>x.classList.remove("active"));b.classList.add("active");$$(".tab").forEach(t=>t.classList.add("hidden"));$("#"+b.dataset.tab).classList.remove("hidden");$("#pageTitle").textContent=b.textContent==="Resumen"?"Resumen mensual":b.textContent; });
 
-$("#addIncome").onclick=()=>{const name=$("#incomeName").value.trim()||"Ingreso";const amount=num($("#incomeAmount").value);if(!amount)return;state.incomes.push({id:uid(),name,amount});$("#incomeName").value="";$("#incomeAmount").value="";save()};
 $("#addBill").onclick=()=>{const name=$("#billName").value.trim();const amount=num($("#billAmount").value);if(!name)return;state.bills.push({id:uid(),name,amount,status:$("#billStatus").value});$("#billName").value="";$("#billAmount").value="";save()};
 $("#monthNotes").addEventListener("input",e=>{
   state.notes=e.target.value;
@@ -1270,7 +1267,11 @@ function renderAccountsList(){
   }
 
   const NEXT_MONTH_CATEGORY_ID="tarjeta_siguiente_mes";
-  const categories=sheetAccounts.filter(x=>x.type==="categoria");
+  const categories=sheetAccounts.filter(x=>
+    x.type==="categoria" &&
+    normalizeId(x.id)!=="total" &&
+    normalizeId(x.name)!=="total"
+  );
   const byCategory=new Map();
   for(const c of categories)byCategory.set(c.id,[]);
   for(const a of sheetAccounts.filter(x=>x.type==="cuenta")){
@@ -1282,8 +1283,15 @@ function renderAccountsList(){
     .filter(a=>a.type==="cuenta")
     .reduce((sum,a)=>sum+num(a.balance),0);
 
+  const lastAccountChange=historyItems.length
+    ? parseHistoryDate(historyItems[0].date)
+    : "Sin historial cargado";
+
   let markup=`<div class="accounts-category" style="margin-top:0;background:#0c1d31;border:1px solid var(--line)">
-    <div>Total de Mis cuentas</div>
+    <div>
+      <div>Total de Mis cuentas</div>
+      <div class="muted" style="font-size:11px;margin-top:3px">Última modificación: ${esc(lastAccountChange)}</div>
+    </div>
     <div class="money">${fmt(grandTotal)}</div>
   </div>`;
 
@@ -1819,6 +1827,7 @@ async function loadSalaryDashboard(){
     salaryPlans={};
     results.forEach(plan=>salaryPlans[plan.week]=plan);
     renderSalaryCards();
+    render();
     setSalaryStatus(`Listo. Se consultó la hoja "${results[0]?.sheetName||salaryMonthText()}".`,true);
 
     if(selectedSalaryWeek && salaryPlans[selectedSalaryWeek]){
@@ -2154,6 +2163,7 @@ async function loadHistory(){
     const data=await apiGet({action:"getHistory",limit:100});
     historyItems=data.history||[];
     renderHistory();
+    renderAccountsList();
     setHistoryStatus(`${historyItems.length} movimientos recientes cargados.`,true);
   }catch(err){
     console.error(err);
@@ -2196,26 +2206,153 @@ function renderHistory(){
   }).join("");
 }
 
+
+const PAYMENT_REMINDER_SPECS=[
+  {key:"lafise",name:"Tarjeta LAFISE",day:3},
+  {key:"davibank",name:"Tarjeta DAVIbank",day:25},
+  {key:"bac",name:"Tarjetas BAC",day:30},
+  {key:"coyol",name:"Casa del Coyol",day:8,minDate:"2026-11-08"},
+  {key:"canoas",name:"Casa de Canoas",day:12,minDate:"2026-11-12"},
+  {key:"condominio",name:"Cuotas condominales",day:5,note:"Pagar antes del día 5"},
+  {key:"servicios",name:"Revisar pago de servicios",day:7},
+  {key:"alquiler_casa",name:"Alquiler de casa",day:4}
+];
+
+function isoLocalDate(d){
+  const y=d.getFullYear();
+  const m=String(d.getMonth()+1).padStart(2,"0");
+  const day=String(d.getDate()).padStart(2,"0");
+  return `${y}-${m}-${day}`;
+}
+
+function reminderPaidId(key,dueDate){
+  return `reminder_${key}_${dueDate}`;
+}
+
+function isReminderPaid(key,dueDate){
+  const id=reminderPaidId(key,dueDate);
+  return state.bills.some(x=>x.id===id && x.status==="Pagado");
+}
+
+function safeMonthlyDue(year,monthIndex,day){
+  const last=new Date(year,monthIndex+1,0).getDate();
+  return new Date(year,monthIndex,Math.min(day,last),12,0,0,0);
+}
+
+function nextReminderDue(spec,now=new Date()){
+  let due=safeMonthlyDue(now.getFullYear(),now.getMonth(),spec.day);
+
+  if(spec.minDate){
+    const [y,m,d]=spec.minDate.split("-").map(Number);
+    const min=new Date(y,m-1,d,12,0,0,0);
+    if(due<min)due=min;
+  }
+
+  const today=new Date(now.getFullYear(),now.getMonth(),now.getDate(),12,0,0,0);
+
+  while(due<today || isReminderPaid(spec.key,isoLocalDate(due))){
+    due=safeMonthlyDue(due.getFullYear(),due.getMonth()+1,spec.day);
+    if(spec.minDate){
+      const [y,m,d]=spec.minDate.split("-").map(Number);
+      const min=new Date(y,m-1,d,12,0,0,0);
+      if(due<min)due=min;
+    }
+  }
+  return due;
+}
+
+function daysUntilDate(due,now=new Date()){
+  const start=new Date(now.getFullYear(),now.getMonth(),now.getDate(),12,0,0,0);
+  const end=new Date(due.getFullYear(),due.getMonth(),due.getDate(),12,0,0,0);
+  return Math.round((end-start)/86400000);
+}
+
+function formatReminderDate(d){
+  return d.toLocaleDateString("es-CR",{day:"2-digit",month:"long",year:"numeric"});
+}
+
+function renderPaymentReminders(){
+  const box=$("#paymentReminders");
+  if(!box)return;
+
+  const now=new Date();
+  const reminders=PAYMENT_REMINDER_SPECS
+    .map(spec=>{
+      const due=nextReminderDue(spec,now);
+      return {...spec,due,days:daysUntilDate(due,now),dueDate:isoLocalDate(due)};
+    })
+    .sort((a,b)=>a.due-b.due);
+
+  box.innerHTML=reminders.map(r=>{
+    const urgent=r.days<=5;
+    const remaining=r.days===0
+      ?"Vence hoy"
+      :r.days===1
+        ?"Falta 1 día"
+        :`Faltan ${r.days} días`;
+
+    return `<div style="
+      display:grid;
+      grid-template-columns:minmax(180px,1fr) minmax(170px,.8fr) auto;
+      gap:10px;
+      align-items:center;
+      padding:11px 12px;
+      margin-bottom:8px;
+      border:1px solid ${urgent?"#7f1d1d":"var(--line)"};
+      background:${urgent?"rgba(127,29,29,.22)":"rgba(255,255,255,.02)"};
+      border-radius:12px">
+        <div>
+          <strong>${esc(r.name)}</strong>
+          ${r.note?`<div class="muted" style="font-size:11px;margin-top:2px">${esc(r.note)}</div>`:""}
+        </div>
+        <div>
+          <div>${esc(formatReminderDate(r.due))}</div>
+          <div style="font-size:12px;font-weight:700;color:${urgent?"#ff6b6b":"var(--muted)"}">${esc(remaining)}</div>
+        </div>
+        <button type="button" class="soft reminder-paid" data-key="${esc(r.key)}" data-date="${esc(r.dueDate)}">Pagado</button>
+      </div>`;
+  }).join("");
+
+  $$(".reminder-paid").forEach(btn=>{
+    btn.onclick=()=>{
+      const id=reminderPaidId(btn.dataset.key,btn.dataset.date);
+      const existing=state.bills.find(x=>x.id===id);
+      if(existing){
+        existing.status="Pagado";
+      }else{
+        state.bills.push({
+          id,
+          name:`Recordatorio ${btn.dataset.key}`,
+          amount:0,
+          status:"Pagado",
+          dueDate:btn.dataset.date,
+          reminder:true
+        });
+      }
+      save();
+    };
+  });
+}
+
 function render(){
   $("#monthNotes").value=state.notes||"";
-  const income=state.incomes.reduce((s,x)=>s+num(x.amount),0);
+  const salaryProjection=Object.values(salaryPlans||{})
+    .reduce((sum,plan)=>sum+num(plan?.total),0);
   const expensesCRC=state.expenses.filter(x=>x.currency!=="USD").reduce((s,x)=>s+roundAmount(x.amount,x.currency),0);
   const budgetsCRC=state.expenses.filter(x=>x.currency!=="USD").reduce((s,x)=>s+num(x.budget),0);
   const fQuota=state.financing.reduce((s,x)=>s+roundAmount(x.quota,x.currency||"CRC"),0);
   const fBudget=state.financing.filter(x=>!x.paid).reduce((s,x)=>s+roundAmount(x.quota,x.currency||"CRC"),0);
-  const billsPending=state.bills.filter(x=>x.status!=="Pagado").reduce((s,x)=>s+num(x.amount),0);
-  $("#kpiIncome").textContent=fmt(income);
+  const billsPending=state.bills.filter(x=>x.status!=="Pagado" && !x.reminder).reduce((s,x)=>s+num(x.amount),0);
+  $("#kpiIncome").textContent=fmt(salaryProjection);
   $("#kpiExpenses").textContent=fmt(expensesCRC+fQuota);
-  $("#kpiBudget").textContent=fmt(budgetsCRC);
   $("#kpiDiff").textContent=fmt(budgetsCRC-expensesCRC-fBudget);
-  $("#kpiBalance").textContent=fmt(income-budgetsCRC-fBudget-billsPending);
+  $("#kpiBalance").textContent=fmt(salaryProjection-budgetsCRC-fBudget-billsPending);
   const pendingCount=state.expenses.filter(x=>(x.status||(!x.reviewed?"Pendiente":"Completado"))==="Pendiente").length;
   const completedCount=state.expenses.filter(x=>(x.status||(!x.reviewed?"Pendiente":"Completado"))==="Completado").length;
   const ignoredCount=state.expenses.filter(x=>(x.status||"")==="Ignorado").length;
   $("#quickSummary").innerHTML=`Tenés <b>${pendingCount}</b> movimientos pendientes, <b>${completedCount}</b> completados y <b>${ignoredCount}</b> ignorados, además de <b>${state.financing.length}</b> financiamientos y <b>${state.bills.filter(x=>x.status!=="Pagado").length}</b> cuentas fijas pendientes.<br><br>Los movimientos del mes quedan sincronizados con Google Sheets.`;
 
-  $("#incomeList").innerHTML=state.incomes.map(x=>`<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--line)"><span>${esc(x.name)}</span><span><b>${fmt(x.amount)}</b> <button class="danger del-income" data-id="${x.id}">×</button></span></div>`).join("")||'<span class="muted">Todavía no hay ingresos.</span>';
-  $$(".del-income").forEach(b=>b.onclick=()=>{state.incomes=state.incomes.filter(x=>x.id!==b.dataset.id);save()});
+  renderPaymentReminders();
 
   const visibleExpenses=state.expenses.filter(x=>expenseGroup(x)===expenseFilter);
   const displayExpenses=buildExpenseDisplay(visibleExpenses);
@@ -2409,7 +2546,8 @@ function render(){
     .reduce((s,x)=>s+roundAmount(x.quota,x.currency||"CRC"),0);
   $("#finAccountTransferTotal").textContent=fmt(finAccountTransferTotal);
 
-  $("#billList").innerHTML=state.bills.map(x=>`<div style="display:grid;grid-template-columns:1fr auto auto auto;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line)"><span>${esc(x.name)}</span><b>${fmt(x.amount)}</b><select class="bill-status" data-id="${x.id}"><option ${x.status==="Pendiente"?"selected":""}>Pendiente</option><option ${x.status==="Pagado"?"selected":""}>Pagado</option></select><button class="danger del-bill" data-id="${x.id}">×</button></div>`).join("")||'<span class="muted">No hay cuentas guardadas.</span>';
+  const visibleBills=state.bills.filter(x=>!x.reminder);
+  $("#billList").innerHTML=visibleBills.map(x=>`<div style="display:grid;grid-template-columns:1fr auto auto auto;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line)"><span>${esc(x.name)}</span><b>${fmt(x.amount)}</b><select class="bill-status" data-id="${x.id}"><option ${x.status==="Pendiente"?"selected":""}>Pendiente</option><option ${x.status==="Pagado"?"selected":""}>Pagado</option></select><button class="danger del-bill" data-id="${x.id}">×</button></div>`).join("")||'<span class="muted">No hay cuentas guardadas.</span>';
   $$(".bill-status").forEach(s=>s.onchange=()=>{state.bills.find(x=>x.id===s.dataset.id).status=s.value;save()});
   $$(".del-bill").forEach(b=>b.onclick=()=>{state.bills=state.bills.filter(x=>x.id!==b.dataset.id);save()});
 }
