@@ -97,6 +97,7 @@
   .salary-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:14px}
   .salary-card{border:1px solid var(--line);background:#0b1829;border-radius:16px;padding:16px}
   .salary-card.applied{opacity:.72}
+  .salary-row-handled{opacity:.65;background:rgba(64,201,139,.035)}
   .salary-card-top{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}
   .salary-card h3{margin:0 0 4px}
   .salary-card .salary-total{font-size:22px;font-weight:900;margin:10px 0 4px}
@@ -783,7 +784,30 @@ function selectableSources(){
   return [...superAccounts,...normalAccounts];
 }
 
-function sourceOptionsHtml(selectedId=""){
+
+function liveAvailableBalanceForSource(sourceId, excludeExpenseId=""){
+  const key=normalizeId(sourceId);
+
+  if(!key || isFictitiousSource(key)){
+    return null;
+  }
+
+  const base=sourceBalance(key);
+
+  const reserved=state.expenses
+    .filter(x=>
+      x.id!==excludeExpenseId &&
+      normalizeId(x.sourceAccount)===key &&
+      !x.transferApplied &&
+      (x.status||"Pendiente")!=="Ignorado" &&
+      roundAmount(x.amount,x.currency)>0
+    )
+    .reduce((sum,x)=>sum+roundAmount(x.amount,x.currency),0);
+
+  return base-reserved;
+}
+
+function sourceOptionsHtml(selectedId="", expense=null){
   const selected=String(selectedId||"").trim().toLowerCase();
 
   const fictitious=[
@@ -795,9 +819,28 @@ function sourceOptionsHtml(selectedId=""){
     `<option value="${esc(s.id)}" ${normalizeId(s.id)===selected?"selected":""}>◈ ${esc(s.name)} — cuenta ficticia</option>`
   ).join("");
 
-  const realHtml=selectableSources().map(s=>
-    `<option value="${esc(s.id)}" ${String(s.id).trim().toLowerCase()===selected?"selected":""}>${s.super?"★ ":""}${esc(s.name)} — ${fmt(s.balance)}</option>`
-  ).join("");
+  const realHtml=selectableSources().map(s=>{
+    const isSelected=String(s.id).trim().toLowerCase()===selected;
+
+    let shownBalance=liveAvailableBalanceForSource(
+      s.id,
+      expense?.id||""
+    );
+
+    if(
+      isSelected &&
+      expense &&
+      Number.isFinite(Number(expense.sourceBalanceBefore))
+    ){
+      shownBalance=Number(expense.sourceBalanceBefore);
+    }
+
+    if(shownBalance===null){
+      shownBalance=s.balance;
+    }
+
+    return `<option value="${esc(s.id)}" ${isSelected?"selected":""}>${s.super?"★ ":""}${esc(s.name)} — ${fmt(shownBalance)}</option>`;
+  }).join("");
 
   return fictitiousHtml+realHtml;
 }
@@ -944,7 +987,12 @@ function applyFinancingAlias(x){
 function workspacePayload(){
   return {
     incomes: state.incomes || [],
-    expenses: state.expenses || [],
+    expenses: (state.expenses || []).map(x=>{
+      const copy={...x};
+      delete copy.sourceBalanceBefore;
+      delete copy.sourceBalanceAfter;
+      return copy;
+    }),
     financing: state.financing || [],
     bills: state.bills || [],
     notes: state.notes || ""
@@ -1010,7 +1058,9 @@ async function loadMonthlyWorkspace(options={}){
       budget:num(x.budget),
       status:x.status || (x.reviewed ? "Completado" : "Pendiente"),
       reviewed:(x.status ? x.status!=="Pendiente" : !!x.reviewed),
-      completedAt:x.completedAt||""
+      completedAt:x.completedAt||"",
+      sourceBalanceBefore:null,
+      sourceBalanceAfter:null
     }));
 
     incoming.financing=(incoming.financing||[]).map(x=>applyFinancingAlias({
@@ -1027,6 +1077,12 @@ async function loadMonthlyWorkspace(options={}){
     state=incoming;
     workspaceLoaded=true;
     dirty=false;
+
+    const gastosActive=document.querySelector('.nav button.active')?.dataset.tab==="gastos";
+    if(gastosActive){
+      rebuildExpenseBalanceSnapshots();
+    }
+
     render();
 
     const count=state.expenses.length+state.financing.length;
@@ -1137,7 +1193,27 @@ async function flushWorkspaceSave(){
   return true;
 }
 
-$$(".nav button").forEach(b=>b.onclick=()=>{ $$(".nav button").forEach(x=>x.classList.remove("active"));b.classList.add("active");$$(".tab").forEach(t=>t.classList.add("hidden"));$("#"+b.dataset.tab).classList.remove("hidden");$("#pageTitle").textContent=b.textContent==="Resumen"?"Resumen mensual":b.textContent; });
+$$(".nav button").forEach(b=>b.onclick=()=>{
+  const currentActive=$$(".nav button").find(x=>x.classList.contains("active"));
+  const leavingGastos=currentActive?.dataset.tab==="gastos" && b.dataset.tab!=="gastos";
+  const enteringGastos=b.dataset.tab==="gastos" && currentActive?.dataset.tab!=="gastos";
+
+  if(leavingGastos){
+    clearExpenseBalanceSnapshots();
+  }
+
+  if(enteringGastos){
+    rebuildExpenseBalanceSnapshots();
+  }
+
+  $$(".nav button").forEach(x=>x.classList.remove("active"));
+  b.classList.add("active");
+  $$(".tab").forEach(t=>t.classList.add("hidden"));
+  $("#"+b.dataset.tab).classList.remove("hidden");
+  $("#pageTitle").textContent=b.textContent==="Resumen"?"Resumen mensual":b.textContent;
+
+  render();
+});
 
 $("#addBill").onclick=()=>{const name=$("#billName").value.trim();const amount=num($("#billAmount").value);if(!name)return;state.bills.push({id:uid(),name,amount,status:$("#billStatus").value});$("#billName").value="";$("#billAmount").value="";save()};
 $("#monthNotes").addEventListener("input",e=>{
@@ -1158,7 +1234,7 @@ $("#reloadMonthData").onclick=async()=>{
     : "No se pudieron recargar los movimientos del mes.";
 };
 
-$("#addExpense").onclick=()=>{state.expenses.push({id:uid(),bank:"Manual",card:"DAVIbank",date:"",desc:"Nuevo gasto",detail:"",currency:"CRC",amount:0,budget:0,reviewed:false,status:"Pendiente",completedAt:""});save()};
+$("#addExpense").onclick=()=>{state.expenses.push({id:uid(),bank:"Manual",card:"DAVIbank",date:"",desc:"Nuevo gasto",detail:"",currency:"CRC",amount:0,budget:0,reviewed:false,status:"Pendiente",completedAt:"",sourceBalanceBefore:null,sourceBalanceAfter:null});save()};
 $("#addFinancing").onclick=()=>{state.financing.push({id:uid(),bank:"Manual",name:"",currency:"CRC",line:"",current:1,total:1,quota:0,balance:0,budget:0,paid:false,sourceAccount:"",accountApplied:false});save()};
 $("#clearExpenses").onclick=()=>{if(confirm("¿Eliminar todos los gastos importados/manuales de este mes?")){state.expenses=[];save()}};
 
@@ -1246,25 +1322,62 @@ function buildExpenseDisplay(expenses){
   return output;
 }
 
+
+function clearExpenseBalanceSnapshots(){
+  state.expenses.forEach(x=>{
+    x.sourceBalanceBefore=null;
+    x.sourceBalanceAfter=null;
+  });
+}
+
+function rebuildExpenseBalanceSnapshots(){
+  clearExpenseBalanceSnapshots();
+
+  const running=new Map();
+
+  const getRunningBalance=(sourceId)=>{
+    const key=normalizeId(sourceId);
+    if(!running.has(key)){
+      running.set(key,sourceBalance(key));
+    }
+    return running.get(key);
+  };
+
+  state.expenses.forEach(x=>{
+    if(
+      !x.sourceAccount ||
+      isFictitiousSource(x.sourceAccount) ||
+      x.transferApplied ||
+      (x.status||"Pendiente")==="Ignorado"
+    ){
+      return;
+    }
+
+    const key=normalizeId(x.sourceAccount);
+    const before=getRunningBalance(key);
+    const after=before-roundAmount(x.amount,x.currency);
+
+    x.sourceBalanceBefore=before;
+    x.sourceBalanceAfter=after;
+    running.set(key,after);
+  });
+}
+
 function projectedSourceBalanceForExpense(x){
   if(!x?.sourceAccount)return null;
 
   const sourceId=normalizeId(x.sourceAccount);
 
-  // Las cuentas ficticias no tienen saldo real en Cuentas mensuales.
   if(isFictitiousSource(sourceId))return null;
 
-  const starting=sourceBalance(sourceId);
+  if(Number.isFinite(Number(x.sourceBalanceAfter))){
+    return Number(x.sourceBalanceAfter);
+  }
 
-  const pendingAssigned=state.expenses
-    .filter(e=>
-      normalizeId(e.sourceAccount)===sourceId &&
-      !e.transferApplied &&
-      num(e.budget)>0
-    )
-    .reduce((sum,e)=>sum+num(e.budget),0);
+  const before=liveAvailableBalanceForSource(sourceId,x.id);
+  if(before===null)return null;
 
-  return starting-pendingAssigned;
+  return before-roundAmount(x.amount,x.currency);
 }
 
 function singleExpenseRow(x, extraClass="", parentKey=""){
@@ -1296,7 +1409,7 @@ function singleExpenseRow(x, extraClass="", parentKey=""){
     <td>
       <select class="source-account" ${x.transferApplied?"disabled":""}>
         <option value="">Seleccionar…</option>
-        ${sourceOptionsHtml(x.sourceAccount)}
+        ${sourceOptionsHtml(x.sourceAccount,x)}
       </select>
     </td>
     <td>${esc(x.currency)}</td>
@@ -1419,8 +1532,8 @@ function nextUniqueAccountId(baseName){
   return candidate;
 }
 
-async function createNextMonthAccount(){
-  const name=prompt("Nombre de la nueva cuenta:");
+async function createAccountInCategory(categoryId,categoryName){
+  const name=prompt(`Nombre de la nueva cuenta para "${categoryName}":`);
   if(name===null)return;
 
   const cleanName=name.trim();
@@ -1447,7 +1560,7 @@ async function createNextMonthAccount(){
     `Nombre: ${cleanName}\n`+
     `ID: ${id}\n`+
     `Saldo inicial: ${fmt(balance)}\n`+
-    `Categoría: Pago siguiente mes\n\n`+
+    `Categoría: ${categoryName}\n\n`+
     `¿Confirmar?`
   );
 
@@ -1461,7 +1574,7 @@ async function createNextMonthAccount(){
       id,
       name:cleanName,
       balance,
-      categoryId:"tarjeta_siguiente_mes"
+      categoryId
     });
 
     if(!data?.ok){
@@ -1470,7 +1583,7 @@ async function createNextMonthAccount(){
 
     setAccountsStatus(`✓ Cuenta "${cleanName}" creada. Sincronizando…`,true);
     await refreshAllLiveData({delay:500,preserveMessage:true});
-    setAccountsStatus(`✓ Cuenta "${cleanName}" agregada a Pago siguiente mes.`,true);
+    setAccountsStatus(`✓ Cuenta "${cleanName}" agregada a ${categoryName}.`,true);
 
   }catch(err){
     console.error(err);
@@ -1535,7 +1648,12 @@ function renderAccountsList(){
     markup+=`<div class="accounts-category">
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
         <span>${isSuperAccountId(c.id)?"★ ":""}${esc(c.name)}${isNextMonth?' <span class="muted" style="font-size:11px">· editable</span>':""}</span>
-        ${isNextMonth?'<button type="button" class="soft add-next-month-account">+ Agregar cuenta</button>':""}
+        <button
+          type="button"
+          class="soft add-category-account"
+          data-category-id="${esc(c.id)}"
+          data-category-name="${esc(c.name)}"
+        >+ Agregar cuenta</button>
       </div>
       <div class="money">${fmt(categoryShownBalance)}</div>
     </div>`;
@@ -1570,8 +1688,13 @@ function renderAccountsList(){
 
   box.innerHTML=markup||'<span class="muted">No hay cuentas.</span>';
 
-  box.querySelectorAll(".add-next-month-account").forEach(btn=>{
-    btn.addEventListener("click",createNextMonthAccount);
+  box.querySelectorAll(".add-category-account").forEach(btn=>{
+    btn.addEventListener("click",()=>{
+      createAccountInCategory(
+        btn.dataset.categoryId,
+        btn.dataset.categoryName
+      );
+    });
   });
 
   const updatePendingState=()=>{
@@ -2140,7 +2263,7 @@ function renderSalaryCards(){
     const applied=!!p.applied;
     const invalid=(p.invalidIds||[]).length;
     const stateBadge=applied
-      ? '<span class="applied-badge">✓ Aplicado</span>'
+      ? '<span class="applied-badge">✓ Fondeado</span>'
       : '<span class="pending-badge">Pendiente</span>';
 
     return `<div class="salary-card ${applied?"applied":""}">
@@ -2152,7 +2275,7 @@ function renderSalaryCards(){
         ${stateBadge}
       </div>
       <div class="salary-total">${fmt(p.total)}</div>
-      <div class="muted">${invalid?`${invalid} ID(s) requieren revisión`:applied?"Semana ya aplicada":"Abrí la previsualización para elegir qué cuentas fondear"}</div>
+      <div class="muted">${invalid?`${invalid} ID(s) requieren revisión`:applied?"Semana ya fondeada":"Abrí la previsualización para elegir qué cuentas fondear"}</div>
       <div class="salary-actions">
         <button class="soft salary-preview-btn" data-week="${week}">${applied?"Ver detalle":"Previsualizar y seleccionar"}</button>
       </div>
@@ -2168,13 +2291,53 @@ function renderSalaryCards(){
   });
 }
 
+
+function salaryManualMovedKey(plan){
+  return `central_salary_moved_${plan.operationId}`;
+}
+
+function getSalaryMovedIds(plan){
+  try{
+    const raw=localStorage.getItem(salaryManualMovedKey(plan));
+    const list=raw?JSON.parse(raw):[];
+    return new Set(Array.isArray(list)?list.map(normalizeId):[]);
+  }catch(_){
+    return new Set();
+  }
+}
+
+function saveSalaryMovedIds(plan,set){
+  localStorage.setItem(
+    salaryManualMovedKey(plan),
+    JSON.stringify([...set])
+  );
+}
+
+function getSalaryFundedIds(plan){
+  const operationId=String(plan?.operationId||"").trim().toUpperCase();
+
+  return new Set(
+    historyItems
+      .filter(x=>
+        String(x.operationId||"").trim().toUpperCase()===operationId &&
+        String(x.type||"").trim().toLowerCase()==="salario"
+      )
+      .map(x=>normalizeId(x.accountId))
+      .filter(Boolean)
+  );
+}
+
 function renderSalaryPreview(plan){
   const box=$("#salaryPreview");
   const title=$("#salaryPreviewTitle");
   if(!box||!plan)return;
+
   title.textContent=`${plan.monthName} · Semana ${plan.week}`;
 
   const invalid=plan.invalidIds||[];
+  const movedIds=getSalaryMovedIds(plan);
+  const fundedIds=getSalaryFundedIds(plan);
+
   let warning="";
   if(invalid.length){
     const categoryOptions=sheetAccounts
@@ -2220,85 +2383,159 @@ function renderSalaryPreview(plan){
     </div>`;
   }
 
-  // Cada vez que se abre una semana pendiente, todas las cuentas vienen marcadas.
-  const rows=(plan.entries||[]).map((x,index)=>`
-    <tr class="salary-select-row" data-id="${esc(x.id)}" data-amount="${num(x.amount)}" data-current="${num(x.currentBalance)}">
-      <td class="salary-select-cell">
-        <input class="salary-checkbox" type="checkbox" ${plan.applied?"disabled":"checked"} aria-label="Incluir ${esc(x.name)}">
-      </td>
-      <td>${esc(x.name)}</td>
-      <td><code>${esc(x.id)}</code></td>
-      <td class="money">${fmt(x.currentBalance)}</td>
-      <td class="money movement-positive salary-add-cell">+${fmt(x.amount)}</td>
-      <td class="money salary-new-cell"><strong>${fmt(x.newBalance)}</strong></td>
-    </tr>`).join("");
+  const rows=(plan.entries||[]).map(x=>{
+    const id=normalizeId(x.id);
+    const funded=fundedIds.has(id);
+    const moved=movedIds.has(id);
+    const handled=funded||moved;
+
+    const checked=!plan.applied && !handled;
+    const disabled=plan.applied || handled;
+
+    let stateControl="";
+    if(funded){
+      stateControl='<span class="applied-badge">Fondeado ✓</span>';
+    }else if(moved){
+      stateControl=`<button type="button" class="soft salary-moved-toggle" data-id="${esc(x.id)}">Movido ✓</button>`;
+    }else{
+      stateControl=`<button type="button" class="soft salary-moved-toggle" data-id="${esc(x.id)}">Marcar movido</button>`;
+    }
+
+    return `
+      <tr
+        class="salary-select-row ${handled?"salary-row-handled":""}"
+        data-id="${esc(x.id)}"
+        data-amount="${num(x.amount)}"
+        data-current="${num(x.currentBalance)}"
+        data-funded="${funded?"1":"0"}"
+        data-moved="${moved?"1":"0"}"
+      >
+        <td class="salary-select-cell">
+          <input
+            class="salary-checkbox"
+            type="checkbox"
+            ${checked?"checked":""}
+            ${disabled?"disabled":""}
+            aria-label="Incluir ${esc(x.name)}"
+          >
+        </td>
+        <td>${esc(x.name)}</td>
+        <td><code>${esc(x.id)}</code></td>
+        <td class="money">${fmt(x.currentBalance)}</td>
+        <td class="money movement-positive salary-add-cell">+${fmt(x.amount)}</td>
+        <td class="money salary-new-cell"><strong>${fmt(x.newBalance)}</strong></td>
+        <td>${stateControl}</td>
+      </tr>`;
+  }).join("");
 
   box.innerHTML=`${warning}
     <div class="notice">
       Operación: <strong>${esc(plan.operationId)}</strong>
-      ${plan.applied?" · Ya fue aplicada y está bloqueada.":" · Desmarcá cualquier cuenta que querás pagar directamente o dejar sin fondear."}
+      ${plan.applied
+        ?" · El fondeo de esta semana ya fue aplicado. Podés seguir usando “Movido” para llevar control de pagos hechos por fuera."
+        :" · Seleccioná lo que querés fondear. Lo que desmarqués conserva su monto para que podás calcular qué falta mover."}
     </div>
+
     <div style="overflow:auto">
       <table>
         <thead>
-          <tr><th class="salary-select-cell">✓</th><th>Cuenta</th><th>ID</th><th class="money">Saldo actual</th><th class="money">Se agrega</th><th class="money">Nuevo saldo</th></tr>
+          <tr>
+            <th class="salary-select-cell">✓</th>
+            <th>Cuenta</th>
+            <th>ID</th>
+            <th class="money">Saldo actual</th>
+            <th class="money">Se agrega</th>
+            <th class="money">Nuevo saldo</th>
+            <th>Estado</th>
+          </tr>
         </thead>
-        <tbody>${rows||'<tr><td colspan="6" class="muted">No hay cuentas válidas.</td></tr>'}</tbody>
+        <tbody>${rows||'<tr><td colspan="7" class="muted">No hay cuentas válidas.</td></tr>'}</tbody>
         <tfoot>
-          <tr class="totals-row"><td colspan="4">Total seleccionado</td><td class="money" id="salarySelectedTotal">${fmt(plan.total)}</td><td></td></tr>
+          <tr class="totals-row">
+            <td colspan="4">Total seleccionado para fondear</td>
+            <td class="money" id="salarySelectedTotal">₡0</td>
+            <td colspan="2"></td>
+          </tr>
         </tfoot>
       </table>
     </div>
+
     <div class="salary-preview-actions">
       <div class="salary-preview-summary">
-        <span>Seleccionadas: <strong id="salarySelectedCount">${plan.count}</strong></span>
-        <span>Sin fondear: <strong id="salarySkippedTotal">${fmt(0)}</strong></span>
+        <span>Seleccionadas: <strong id="salarySelectedCount">0</strong></span>
+        <span>Total pendiente: <strong id="salaryPendingTotal">₡0</strong></span>
       </div>
-      <button type="button" class="primary salary-apply-selected" id="salaryApplySelected" ${plan.applied||!plan.entries?.length?"disabled":""}>
-        ${plan.applied?"Semana aplicada ✓":"Aplicar cuentas seleccionadas"}
+
+      <button
+        type="button"
+        class="primary salary-apply-selected"
+        id="salaryApplySelected"
+        ${plan.applied||!plan.entries?.length?"disabled":""}
+      >
+        ${plan.applied?"Semana fondeada ✓":"Fondear seleccionadas"}
       </button>
     </div>`;
-
-  const checkboxes=[...box.querySelectorAll(".salary-checkbox")];
 
   const updateSelection=()=>{
     let selectedTotal=0;
     let selectedCount=0;
-    let allTotal=0;
+    let pendingTotal=0;
 
     box.querySelectorAll(".salary-select-row").forEach(row=>{
       const checkbox=row.querySelector(".salary-checkbox");
       const amount=num(row.dataset.amount);
-      const current=num(row.dataset.current);
-      allTotal+=amount;
+      const handled=row.dataset.funded==="1" || row.dataset.moved==="1";
+      const selected=!handled && !!checkbox?.checked;
 
-      if(checkbox?.checked){
+      if(selected){
         selectedTotal+=amount;
         selectedCount++;
         row.classList.remove("salary-row-unchecked");
-        row.querySelector(".salary-add-cell").textContent=`+${fmt(amount)}`;
-        row.querySelector(".salary-new-cell").innerHTML=`<strong>${fmt(current+amount)}</strong>`;
-      }else{
+      }else if(!handled){
+        pendingTotal+=amount;
         row.classList.add("salary-row-unchecked");
-        row.querySelector(".salary-add-cell").textContent=fmt(0);
-        row.querySelector(".salary-new-cell").innerHTML=`<strong>${fmt(current)}</strong>`;
+      }else{
+        row.classList.remove("salary-row-unchecked");
       }
+
+      // IMPORTANTE: al desmarcar NO alteramos "Se agrega" ni "Nuevo saldo".
+      // Esos montos siguen visibles como referencia.
     });
 
     const totalEl=$("#salarySelectedTotal");
     const countEl=$("#salarySelectedCount");
-    const skippedEl=$("#salarySkippedTotal");
+    const pendingEl=$("#salaryPendingTotal");
     const applyBtn=$("#salaryApplySelected");
 
     if(totalEl)totalEl.textContent=fmt(selectedTotal);
     if(countEl)countEl.textContent=selectedCount;
-    if(skippedEl)skippedEl.textContent=fmt(allTotal-selectedTotal);
+    if(pendingEl)pendingEl.textContent=fmt(pendingTotal);
+
     if(applyBtn&&!plan.applied){
       applyBtn.disabled=selectedCount===0;
     }
   };
 
-  checkboxes.forEach(cb=>cb.addEventListener("change",updateSelection));
+  box.querySelectorAll(".salary-checkbox").forEach(cb=>{
+    cb.addEventListener("change",updateSelection);
+  });
+
+  box.querySelectorAll(".salary-moved-toggle").forEach(btn=>{
+    btn.onclick=()=>{
+      const id=normalizeId(btn.dataset.id);
+      if(fundedIds.has(id))return;
+
+      if(movedIds.has(id)){
+        movedIds.delete(id);
+      }else{
+        movedIds.add(id);
+      }
+
+      saveSalaryMovedIds(plan,movedIds);
+      renderSalaryPreview(plan);
+    };
+  });
+
   updateSelection();
 
   box.querySelectorAll(".salary-create-account").forEach(btn=>{
@@ -2372,17 +2609,22 @@ function renderSalaryPreview(plan){
     applyBtn.onclick=async()=>{
       try{
         const selectedIds=[...box.querySelectorAll(".salary-select-row")]
-          .filter(row=>row.querySelector(".salary-checkbox")?.checked)
+          .filter(row=>
+            row.dataset.funded!=="1" &&
+            row.dataset.moved!=="1" &&
+            row.querySelector(".salary-checkbox")?.checked
+          )
           .map(row=>row.dataset.id);
 
         await applySalaryWeek(plan.week,selectedIds);
       }catch(err){
         console.error(err);
-        setSalaryStatus("No se pudo iniciar la aplicación del salario: "+(err?.message||err),false);
+        setSalaryStatus("No se pudo iniciar el fondeo: "+(err?.message||err),false);
       }
     };
   }
 }
+
 
 async function applySalaryWeek(week,selectedIds=[]){
   const plan=salaryPlans[week];
@@ -2397,7 +2639,7 @@ async function applySalaryWeek(week,selectedIds=[]){
   );
 
   if(!selectedEntries.length){
-    setSalaryStatus("Seleccioná al menos una cuenta antes de aplicar la semana.",false);
+    setSalaryStatus("Seleccioná al menos una cuenta antes de fondear la semana.",false);
     return;
   }
 
@@ -2406,14 +2648,14 @@ async function applySalaryWeek(week,selectedIds=[]){
   const pendingInvalid=plan.invalidIds||[];
 
   const ok=confirm(
-    `Se van a sumar ${fmt(selectedTotal)} a ${selectedEntries.length} cuentas de ${plan.monthName}, semana ${week}.`+
+    `Se van a fondear ${selectedEntries.length} cuentas por ${fmt(selectedTotal)} en ${plan.monthName}, semana ${week}.`+
     `${skippedCount?`\n\n${skippedCount} cuenta(s) válidas quedarán sin fondear.`:""}`+
     `${pendingInvalid.length?`\n\n${pendingInvalid.length} ID(s) pendientes no se aplicarán en esta operación y deberán corregirse o agregarse después.`:""}`+
-    `\n\nEsta semana solo se puede aplicar una vez.\n\n¿Confirmar?`
+    `\n\nEl fondeo de esta semana solo se puede ejecutar una vez.\n\n¿Confirmar?`
   );
   if(!ok)return;
 
-  setSalaryStatus(`Aplicando ${plan.monthName} semana ${week}…`);
+  setSalaryStatus(`Fondeando ${plan.monthName} semana ${week}…`);
 
   try{
     const result=await apiPost({
@@ -2424,7 +2666,7 @@ async function applySalaryWeek(week,selectedIds=[]){
       selectedIds:selectedIds
     });
 
-    const successMsg=`✓ Semana ${week} aplicada. ${result.count} cuentas actualizadas por ${fmt(result.total)}. Sincronizando saldos…`;
+    const successMsg=`✓ Semana ${week} fondeada. ${result.count} cuentas actualizadas por ${fmt(result.total)}. Sincronizando saldos…`;
     setSalaryStatus(successMsg,true);
 
     await refreshAllLiveData({delay:1200,preserveMessage:successMsg});
@@ -2432,10 +2674,10 @@ async function applySalaryWeek(week,selectedIds=[]){
     selectedSalaryWeek=week;
     if(salaryPlans[week])renderSalaryPreview(salaryPlans[week]);
 
-    setSalaryStatus(`✓ Semana ${week} aplicada correctamente. ${result.count} cuentas recibieron fondos.`,true);
+    setSalaryStatus(`✓ Semana ${week} fondeada correctamente. ${result.count} cuentas recibieron fondos.`,true);
   }catch(err){
     console.error(err);
-    setSalaryStatus("No se pudo aplicar la semana: "+err.message,false);
+    setSalaryStatus("No se pudo fondear la semana: "+err.message,false);
     await loadSalaryDashboard();
   }
 }
@@ -2641,7 +2883,19 @@ function render(){
 
   renderPaymentReminders();
 
-  const visibleExpenses=state.expenses.filter(x=>expenseGroup(x)===expenseFilter);
+  const expenseStatusRank=x=>{
+    const status=x.status||(!x.reviewed?"Pendiente":"Completado");
+    if(status==="Pendiente")return 0;
+    if(status==="Completado")return 1;
+    return 2; // Ignorado
+  };
+
+  const visibleExpenses=state.expenses
+    .filter(x=>expenseGroup(x)===expenseFilter)
+    .map((x,index)=>({x,index}))
+    .sort((a,b)=>expenseStatusRank(a.x)-expenseStatusRank(b.x) || a.index-b.index)
+    .map(item=>item.x);
+
   const displayExpenses=buildExpenseDisplay(visibleExpenses);
 
   $("#expenseBody").innerHTML=displayExpenses.map(entry=>{
@@ -2702,6 +2956,10 @@ function render(){
       x.sourceAccount=e.target.value;
       x.totalsCleared=false;
 
+      // Cada fila congela el saldo que existía cuando elegiste la cuenta.
+      x.sourceBalanceBefore=null;
+      x.sourceBalanceAfter=null;
+
       if(x.sourceAccount){
         const rounded=roundAmount(x.amount,x.currency);
         x.budget=rounded;
@@ -2711,9 +2969,19 @@ function render(){
           x.status="Completado";
           x.completedAt=x.completedAt||new Date().toISOString();
         }else{
-          const projected=projectedSourceBalanceForExpense(x);
+          const before=liveAvailableBalanceForSource(
+            x.sourceAccount,
+            x.id
+          );
+          const after=
+            before===null
+              ? null
+              : before-rounded;
 
-          if(projected!==null && projected>=0){
+          x.sourceBalanceBefore=before;
+          x.sourceBalanceAfter=after;
+
+          if(after!==null && after>=0){
             x.reviewed=true;
             x.status="Completado";
             x.completedAt=x.completedAt||new Date().toISOString();
@@ -2729,6 +2997,8 @@ function render(){
         x.reviewed=false;
         x.status="Pendiente";
         x.completedAt="";
+        x.sourceBalanceBefore=null;
+        x.sourceBalanceAfter=null;
       }
 
       save();
@@ -2802,7 +3072,12 @@ function render(){
     formatMixedCurrencyTotal(completedExternalItems,x=>roundAmount(x.amount,x.currency));
 
   $("#finCurrentMonthHead").textContent=`Cuota ${monthLabel(month)}`;
-  $("#finBody").innerHTML=state.financing.map(x=>{
+  const orderedFinancing=state.financing
+    .map((x,index)=>({x,index}))
+    .sort((a,b)=>(Number(!!a.x.paid)-Number(!!b.x.paid)) || a.index-b.index)
+    .map(item=>item.x);
+
+  $("#finBody").innerHTML=orderedFinancing.map(x=>{
     if(x.paid===undefined)x.paid=false;
     if(x.sourceAccount===undefined)x.sourceAccount="";
     if(x.accountApplied===undefined)x.accountApplied=false;
@@ -2916,7 +3191,7 @@ async function pageLines(page){
 function cleanMoney(s){return num(String(s).replace(/[()]/g,m=>m==="("? "-":""))}
 function addExpenseUnique(x){
   const sig=[x.bank,x.card,x.date,x.desc,x.currency,x.amount].join("|");
-  if(!state.expenses.some(e=>[e.bank,e.card,e.date,e.desc,e.currency,e.amount].join("|")===sig))state.expenses.push({...x,id:uid(),detail:"",budget:0,reviewed:false,status:"Pendiente",completedAt:""});
+  if(!state.expenses.some(e=>[e.bank,e.card,e.date,e.desc,e.currency,e.amount].join("|")===sig))state.expenses.push({...x,id:uid(),detail:"",budget:0,reviewed:false,status:"Pendiente",completedAt:"",sourceBalanceBefore:null,sourceBalanceAfter:null});
 }
 function addFinUnique(x){
   x.currency=(x.currency||"CRC").toUpperCase();
