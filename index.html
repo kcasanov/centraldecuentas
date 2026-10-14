@@ -412,7 +412,7 @@
       <button data-tab="financiamientos" title="Financiamientos"><span class="nav-icon">◫</span><span class="nav-label">Financiamientos</span></button>
       <button data-tab="miscuentas" title="Mis cuentas"><span class="nav-icon">◎</span><span class="nav-label">Mis cuentas</span></button>
       <button data-tab="salarios" title="Actualización por salario"><span class="nav-icon">↗</span><span class="nav-label">Actualización por salario</span></button>
-      <button data-tab="planmensual" title="Plan desde octubre"><span class="nav-icon">▣</span><span class="nav-label">Plan desde octubre</span></button>
+      <button data-tab="planmensual" title="Plan mensual"><span class="nav-icon">▣</span><span class="nav-label">Plan mensual</span></button>
       <button data-tab="historial" title="Historial"><span class="nav-icon">↺</span><span class="nav-label">Historial</span></button>
       <button data-tab="cuentas" title="Cuentas y notas"><span class="nav-icon">✎</span><span class="nav-label">Cuentas y notas</span></button>
     </div>
@@ -588,53 +588,25 @@
       <div class="panel">
         <div class="section-title">
           <div>
-            <h2>Plan mensual aprobado · desde octubre 2026</h2>
-            <div class="muted">Distribución base diseñada para cubrir las cuentas personales sin cargar más de ₡100.000 al mes al flujo de carros.</div>
+            <h2>Plan mensual</h2>
+            <div class="muted">Lee la misma hoja <b>[mes] carros y casas</b> que usa Actualización por salario. No hay montos fijos dentro del HTML.</div>
           </div>
           <span class="month-chip" id="planMonthLabel">—</span>
         </div>
 
-        <div class="plan-note">
-          Regla base desde octubre: salario disponible ₡860.000 en semanas 1 y 3
-          (₡785.000 + ₡75.000 liberados al suspender temporalmente el ahorro de asociación),
-          Coyol ₡565.000 en semana 2, Canoas ₡450.000 en semana 4 e
-          <b>Ingresos carros ₡100.000 alrededor del día 15</b>.
-          Los gastos en dólares quedan fuera de este plan.
-        </div>
-
-        <div id="planNotApplicable" class="plan-off hidden">
-          Este plan entra en vigencia a partir de octubre de 2026. Seleccioná octubre 2026 o un mes posterior.
+        <div class="plan-note" id="planSourceNote">
+          Iniciá sesión para consultar el plan del mes seleccionado.
         </div>
 
         <div id="planContent">
           <div class="plan-summary">
-            <div class="plan-kpi"><small>Ingresos disponibles</small><strong id="planIncomeTotal">₡2.835.000</strong></div>
-            <div class="plan-kpi"><small>Gastos distribuidos</small><strong id="planExpenseTotal">₡2.817.500</strong></div>
-            <div class="plan-kpi"><small>Ingresos carros</small><strong id="planCarsTotal">₡100.000</strong></div>
-            <div class="plan-kpi"><small>Colchón mensual</small><strong class="plan-positive" id="planBufferTotal">₡17.500</strong></div>
+            <div class="plan-kpi"><small>Total planificado</small><strong id="planIncomeTotal">₡0</strong></div>
+            <div class="plan-kpi"><small>Semanas con datos</small><strong id="planExpenseTotal">0 / 4</strong></div>
+            <div class="plan-kpi"><small>Semanas fondeadas</small><strong id="planCarsTotal">0</strong></div>
+            <div class="plan-kpi"><small>Pendiente de fondear</small><strong id="planBufferTotal">₡0</strong></div>
           </div>
 
           <div class="plan-week-grid" id="planWeekGrid"></div>
-
-          <div class="panel" style="margin-top:14px">
-            <h2>Cambios permanentes del escenario</h2>
-            <div class="table-wrap">
-              <table>
-                <thead><tr><th>Cuenta</th><th class="money">Monto anterior</th><th class="money">Nuevo monto</th><th class="money">Reducción</th></tr></thead>
-                <tbody>
-                  <tr><td>Gastos varios</td><td class="money">₡100.000</td><td class="money">₡40.000</td><td class="money plan-positive">₡60.000</td></tr>
-                  <tr><td>Diario</td><td class="money">₡115.000</td><td class="money">₡85.000</td><td class="money plan-positive">₡30.000</td></tr>
-                  <tr><td>Animales</td><td class="money">₡70.000</td><td class="money">₡60.000</td><td class="money plan-positive">₡10.000</td></tr>
-                  <tr><td>Feria</td><td class="money">₡30.000</td><td class="money">₡15.000</td><td class="money plan-positive">₡15.000</td></tr>
-                  <tr><td>Comida empresa</td><td class="money">₡40.000</td><td class="money">₡0</td><td class="money plan-positive">₡40.000</td></tr>
-                  <tr><td>Comida aniversario</td><td class="money">₡30.000</td><td class="money">₡25.000</td><td class="money plan-positive">₡5.000</td></tr>
-                  <tr><td>Ahorro asociación</td><td class="money">₡150.000</td><td class="money">₡0</td><td class="money plan-positive">₡150.000 liberados</td></tr>
-                  <tr><td>Cuenta por pagar</td><td class="money">₡375.000</td><td class="money">Eliminada</td><td class="money">—</td></tr>
-                </tbody>
-              </table>
-            </div>
-            <div class="notice">Los ₡150.000 de asociación no se tratan como gasto adicional: al suspender el ahorro, se liberan ₡75.000 en cada uno de los dos pagos de salario del mes.</div>
-          </div>
         </div>
       </div>
     </section>
@@ -2084,85 +2056,92 @@ async function confirmFinancingTransfers(){
 }
 
 
-const APPROVED_PLAN_START = "2026-10";
-const approvedMonthlyPlan = {
-  incomeTotal: 2835000,
-  expenseTotal: 2817500,
-  cars: 100000,
-  buffer: 17500,
-  weeks: [
-    {
-      week:1, income:860000, expenses:855000, balance:5000,
-      items:[
-        ["Casa",427000],["Ayuda",25000],["Gastos varios",40000],["Animales",30000],
-        ["Comida",100000],["Internet mami",28000],["Combustible",10000],["Impuestos",10000],
-        ["Comida aniversario",25000],["Mami",85000],["Luz casa",40000],["Carne",15000],
-        ["Teléfono",20000]
-      ]
-    },
-    {
-      week:2, income:665000, expenses:655000, balance:10000,
-      items:[["Cuota Coopeande",570000],["Diario",70000],["Feria",15000]]
-    },
-    {
-      week:3, income:860000, expenses:857500, balance:2500,
-      items:[
-        ["Casa",348000],["Ayuda",75000],["Diario",15000],["Animales",30000],["Carne",20000],
-        ["Mami",85000],["Luz casa",15000],["Luz mami",45000],["Internet",36000],
-        ["Teléfono",10000],["Teléfono mami",16500],["Impuestos",25000],["Alquiler casa",55000],
-        ["Cuota condominal",57000],["Ahorro cumpleaños mami",15000],["Ahorro skincare",10000]
-      ]
-    },
-    {
-      week:4, income:450000, expenses:450000, balance:0,
-      items:[["Préstamo",390000],["Cuota condominal",60000]]
-    }
-  ]
-};
-
 function renderApprovedPlan(){
   const label=$("#planMonthLabel");
-  const content=$("#planContent");
-  const off=$("#planNotApplicable");
   const grid=$("#planWeekGrid");
-  if(!label||!content||!off||!grid)return;
+  const note=$("#planSourceNote");
+  if(!label||!grid)return;
 
   const {year,month:mon}=selectedYearMonth();
-  const key=`${year}-${String(mon||0).padStart(2,"0")}`;
   label.textContent=(year&&mon)?`${monthNamesES[mon-1]} ${year}`:"—";
 
-  const applies=!!(year&&mon&&key>=APPROVED_PLAN_START);
-  content.classList.toggle("hidden",!applies);
-  off.classList.toggle("hidden",applies);
-  if(!applies)return;
+  const plans=[1,2,3,4]
+    .map(week=>salaryPlans[week])
+    .filter(Boolean);
 
-  $("#planIncomeTotal").textContent=fmt(approvedMonthlyPlan.incomeTotal);
-  $("#planExpenseTotal").textContent=fmt(approvedMonthlyPlan.expenseTotal);
-  $("#planCarsTotal").textContent=fmt(approvedMonthlyPlan.cars);
-  $("#planBufferTotal").textContent=fmt(approvedMonthlyPlan.buffer);
+  if(!accountsLoaded){
+    if(note)note.textContent="Iniciá sesión para consultar el plan del mes seleccionado.";
+    grid.innerHTML='<div class="plan-off">Sin conexión con Google Sheets.</div>';
+    $("#planIncomeTotal").textContent=fmt(0);
+    $("#planExpenseTotal").textContent="0 / 4";
+    $("#planCarsTotal").textContent="0";
+    $("#planBufferTotal").textContent=fmt(0);
+    return;
+  }
 
-  grid.innerHTML=approvedMonthlyPlan.weeks.map(w=>{
-    const rows=w.items.map(([name,amount])=>`<tr><td>${esc(name)}</td><td>${fmt(amount)}</td></tr>`).join("");
-    const incomeNote=w.week===1||w.week===3
-      ? "Salario disponible"
-      : w.week===2
-        ? "Coyol + ₡100.000 carros"
-        : "Casa Canoas";
+  if(!plans.length){
+    if(note)note.textContent=`Todavía no se pudo cargar "${monthNamesES[(mon||1)-1]} carros y casas". Usá Actualización por salario para reintentar la consulta.`;
+    grid.innerHTML='<div class="plan-off">No hay información de semanas cargada para este mes.</div>';
+    $("#planIncomeTotal").textContent=fmt(0);
+    $("#planExpenseTotal").textContent="0 / 4";
+    $("#planCarsTotal").textContent="0";
+    $("#planBufferTotal").textContent=fmt(0);
+    return;
+  }
+
+  const sourceName=plans.find(p=>p.sheetName)?.sheetName || `${monthNamesES[mon-1]} carros y casas`;
+  if(note)note.innerHTML=`Fuente: <b>${esc(sourceName)}</b>. Este plan se genera directamente de la misma información que usa Actualización por salario.`;
+
+  const totalPlanned=plans.reduce((sum,p)=>sum+num(p.total),0);
+  const fundedPlans=plans.filter(p=>p.applied);
+  const fundedTotal=fundedPlans.reduce((sum,p)=>sum+num(p.total),0);
+  const pendingTotal=Math.max(0,totalPlanned-fundedTotal);
+
+  $("#planIncomeTotal").textContent=fmt(totalPlanned);
+  $("#planExpenseTotal").textContent=`${plans.length} / 4`;
+  $("#planCarsTotal").textContent=String(fundedPlans.length);
+  $("#planBufferTotal").textContent=fmt(pendingTotal);
+  $("#planBufferTotal").className=pendingTotal>0?"":"plan-positive";
+
+  grid.innerHTML=[1,2,3,4].map(week=>{
+    const p=salaryPlans[week];
+
+    if(!p){
+      return `<div class="plan-week">
+        <div class="plan-head">
+          <div><h3>Semana ${week}</h3><div class="muted">No se pudo cargar esta semana.</div></div>
+        </div>
+      </div>`;
+    }
+
+    const entries=(p.entries||[]);
+    const rows=entries.length
+      ? entries.map(x=>`
+          <tr>
+            <td>
+              ${esc(x.name||x.id||"Cuenta")}
+              ${x.id?`<div class="muted" style="font-size:11px">${esc(x.id)}</div>`:""}
+            </td>
+            <td>${fmt(x.amount)}</td>
+          </tr>
+        `).join("")
+      : '<tr><td colspan="2" class="muted">Sin cuentas para esta semana.</td></tr>';
+
     return `<div class="plan-week">
       <div class="plan-head">
         <div>
-          <h3>Semana ${w.week}</h3>
-          <div class="muted">${incomeNote}</div>
+          <h3>${esc(p.monthName||monthNamesES[mon-1])} · Semana ${week}</h3>
+          <div class="muted">${p.count ?? entries.length} cuentas · ${p.applied?"Fondeada":"Pendiente"}</div>
         </div>
         <div style="text-align:right">
-          <div><strong>${fmt(w.income)}</strong></div>
-          <div class="plan-balance ${w.balance>0?"plan-positive":"plan-zero"}">Saldo ${fmt(w.balance)}</div>
+          <div><strong>${fmt(p.total)}</strong></div>
+          <div class="plan-balance ${p.applied?"plan-positive":"plan-zero"}">${p.applied?"Fondeada ✓":"Pendiente"}</div>
         </div>
       </div>
       <table>
         <thead><tr><th>Cuenta</th><th>Monto</th></tr></thead>
         <tbody>${rows}</tbody>
-        <tfoot><tr class="totals-row"><td>Total semana</td><td>${fmt(w.expenses)}</td></tr></tfoot>
+        <tfoot><tr class="totals-row"><td>Total semana</td><td>${fmt(p.total)}</td></tr></tfoot>
       </table>
     </div>`;
   }).join("");
@@ -2196,10 +2175,34 @@ function setHistoryStatus(msg,ok=null){
 async function apiGet(params){
   const token=$("#apiToken")?.value.trim();
   if(!token)throw new Error("No hay token activo.");
+
   const q=new URLSearchParams({...params,token});
-  const res=await fetch(ACCOUNTS_API_URL+"?"+q.toString(),{method:"GET",cache:"no-store"});
-  const data=await res.json();
-  if(!data.ok)throw new Error(data.error||"Respuesta no válida");
+  let res;
+
+  try{
+    res=await fetch(
+      ACCOUNTS_API_URL+"?"+q.toString(),
+      {method:"GET",cache:"no-store"}
+    );
+  }catch(err){
+    throw new Error(`No se pudo conectar con Apps Script (${err?.message||"Failed to fetch"}).`);
+  }
+
+  if(!res.ok){
+    throw new Error(`Apps Script respondió HTTP ${res.status}.`);
+  }
+
+  let data;
+  try{
+    data=await res.json();
+  }catch(_){
+    throw new Error("Apps Script respondió, pero la respuesta no era JSON válido.");
+  }
+
+  if(!data.ok){
+    throw new Error(data.error||"Respuesta no válida");
+  }
+
   return data;
 }
 
@@ -2216,6 +2219,31 @@ async function apiPost(payload){
   return data;
 }
 
+async function fetchSalaryWeekWithRetry(year,mon,week,attempts=3){
+  let lastError=null;
+
+  for(let attempt=1;attempt<=attempts;attempt++){
+    try{
+      return await apiGet({
+        action:"getSalaryPlan",
+        year,
+        month:mon,
+        week
+      });
+    }catch(err){
+      lastError=err;
+      console.warn(`Salary week ${week}, attempt ${attempt} failed:`,err);
+
+      if(attempt<attempts){
+        await sleep(500*attempt);
+      }
+    }
+  }
+
+  const detail=lastError?.message||String(lastError)||"Error desconocido";
+  throw new Error(`Semana ${week}: ${detail}`);
+}
+
 async function loadSalaryDashboard(){
   const {year,month:mon}=selectedYearMonth();
   const grid=$("#salaryGrid");
@@ -2223,32 +2251,64 @@ async function loadSalaryDashboard(){
 
   if(!accountsLoaded){
     if(grid)grid.innerHTML="";
+    salaryPlans={};
+    renderApprovedPlan();
     setSalaryStatus("Iniciá sesión para consultar las semanas del mes.");
     return;
   }
 
-  setSalaryStatus(`Consultando ${salaryMonthText()}…`);
-  if(grid)grid.innerHTML='<div class="muted">Cargando semanas…</div>';
+  salaryPlans={};
+  renderApprovedPlan();
 
-  try{
-    const results=await Promise.all([1,2,3,4].map(week=>
-      apiGet({action:"getSalaryPlan",year,month:mon,week})
-    ));
-    salaryPlans={};
-    results.forEach(plan=>salaryPlans[plan.week]=plan);
-    renderSalaryCards();
-    render();
-    setSalaryStatus(`Listo. Se consultó la hoja "${results[0]?.sheetName||salaryMonthText()}".`,true);
+  if(grid)grid.innerHTML='<div class="muted">Cargando semanas una por una…</div>';
 
-    if(selectedSalaryWeek && salaryPlans[selectedSalaryWeek]){
-      renderSalaryPreview(salaryPlans[selectedSalaryWeek]);
+  const errors=[];
+  let loaded=0;
+
+  for(const week of [1,2,3,4]){
+    setSalaryStatus(`Consultando ${salaryMonthText()} · semana ${week} de 4…`);
+
+    try{
+      const plan=await fetchSalaryWeekWithRetry(year,mon,week,3);
+      salaryPlans[plan.week||week]=plan;
+      loaded++;
+
+      renderSalaryCards();
+      renderApprovedPlan();
+      render();
+
+      if(selectedSalaryWeek===week){
+        renderSalaryPreview(plan);
+      }
+
+    }catch(err){
+      console.error(err);
+      errors.push(err.message||`Semana ${week}: error desconocido`);
+
+      // Keep the weeks that did load instead of throwing the whole month away.
+      renderSalaryCards();
+      renderApprovedPlan();
     }
-  }catch(err){
-    console.error(err);
-    salaryPlans={};
-    if(grid)grid.innerHTML="";
-    setSalaryStatus("No se pudo consultar el salario del mes: "+err.message,false);
   }
+
+  if(loaded===4){
+    const first=salaryPlans[1]||salaryPlans[2]||salaryPlans[3]||salaryPlans[4];
+    setSalaryStatus(`Listo. Se consultó la hoja "${first?.sheetName||salaryMonthText()}".`,true);
+  }else if(loaded>0){
+    setSalaryStatus(
+      `Se cargaron ${loaded} de 4 semanas. ${errors.join(" · ")}`,
+      false
+    );
+  }else{
+    if(grid)renderSalaryCards();
+    setSalaryStatus(
+      `No se pudo consultar ninguna semana de ${salaryMonthText()}. ${errors.join(" · ")}`,
+      false
+    );
+  }
+
+  renderApprovedPlan();
+  render();
 }
 
 function renderSalaryCards(){
