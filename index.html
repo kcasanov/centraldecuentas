@@ -121,19 +121,37 @@
   .plan-kpi small{display:block;color:var(--muted);margin-bottom:6px}
   .plan-kpi strong{font-size:22px}
   .plan-week-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
-  .plan-week{background:#0b1829;border:1px solid var(--line);border-radius:16px;padding:16px}
+  .plan-week-grid>*{min-width:0}
+  .plan-week{background:#0b1829;border:1px solid var(--line);border-radius:16px;padding:16px;min-width:0;overflow:hidden}
   .plan-week h3{margin:0 0 8px}
   .plan-week .plan-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}
+  .plan-week .plan-head>*{min-width:0}
   .plan-week .plan-balance{font-weight:900}
-  .plan-week table{width:100%;border-collapse:collapse;margin-top:10px}
-  .plan-week th,.plan-week td{padding:8px 6px;border-bottom:1px solid var(--line)}
+  .plan-week table{
+    width:100%;
+    min-width:0!important;
+    table-layout:fixed;
+    border-collapse:collapse;
+    margin-top:10px
+  }
+  .plan-week th,.plan-week td{
+    padding:8px 6px;
+    border-bottom:1px solid var(--line);
+    min-width:0;
+    overflow-wrap:anywhere
+  }
   .plan-week th{font-size:12px;color:var(--muted);text-align:left}
-  .plan-week td:last-child,.plan-week th:last-child{text-align:right}
+  .plan-week th:first-child,.plan-week td:first-child{width:auto}
+  .plan-week th:last-child,.plan-week td:last-child{
+    width:150px;
+    text-align:right;
+    white-space:nowrap
+  }
   .plan-positive{color:var(--good)}
   .plan-zero{color:var(--muted)}
   .plan-note{padding:12px 14px;border-radius:12px;background:#11253d;color:#cfe1fa;font-size:13px;margin:10px 0}
   .plan-off{padding:16px;border:1px dashed var(--line);border-radius:14px;color:var(--muted)}
-  @media(max-width:900px){.salary-grid,.plan-week-grid{grid-template-columns:1fr}.plan-summary{grid-template-columns:repeat(2,minmax(0,1fr))}}
+  @media(max-width:900px){.salary-grid,.plan-week-grid{grid-template-columns:1fr}.plan-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.plan-week th:last-child,.plan-week td:last-child{width:135px}}
   @media(max-width:520px){.plan-summary{grid-template-columns:1fr}}
 
 
